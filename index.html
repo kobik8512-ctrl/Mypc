@@ -7103,19 +7103,17 @@ async function startHost(title){
   updateCount(); updateLikesUI(); updateCoinsUI();
   show("live-room");
   await startCam();
-  // Bots ONLY for admin (or special email after admin unlock)
-  if (isAdmin || (user && user.email === "kobik8512@gmail.com" && isAdmin)) {
-    startBots();
-  } else {
-    stopBots();
-    botCount = 0;
-    updateCount();
-  }
+  // Never auto-spawn bots — only when admin presses Add viewers
+  stopBots();
+  botCount = 0;
+  realViewers = 0;
+  updateCount();
   startLikeSim();
-  startRealSim();
+  // no startRealSim fake viewers — real count comes from Firebase viewers/
   startListening();
   if (typeof startHostOnline === "function") startHostOnline();
   if (typeof listenForViewers === "function") listenForViewers();
+  // Host also listens so viewer messages appear
   if (typeof subscribeLiveChat === "function") subscribeLiveChat(currentLiveId);
   toast(liveRegion === "ge" ? "Live · Georgia server" : "You're live · English server");
   try {
@@ -7236,7 +7234,11 @@ document.getElementById("poll-opt-a").onkeydown = function(e){ if (e.key === "En
 document.getElementById("poll-opt-b").onkeydown = function(e){ if (e.key === "Enter") submitAsk(); };
 
 function totalWatching(){
-  return Math.max(1, Math.floor((botCount||0) + (realViewers||0) + (isHost ? 1 : 0)));
+  // bots (admin) + real humans in viewers/ (includes host as 1 if we want)
+  const bots = Math.max(0, Math.floor(Number(botCount) || 0));
+  const humans = Math.max(0, Math.floor(Number(realViewers) || 0));
+  // Always show at least 1 when live (the host)
+  return Math.max(isHost || currentLiveId ? 1 : 0, bots + humans);
 }
 function setPollShares(favIdx, leadPct){
   // leadPct e.g. 0.62 means favorite gets 62%, others split rest unevenly
@@ -7511,29 +7513,33 @@ document.addEventListener("click", function(e){ if (bMenu && !bMenu.contains(e.t
 async function addBotsBatch(n){
   if (!isAdmin) { toast("Admin only"); return; }
   n = Math.floor(Number(n)) || 1;
-  // If host is admin: run local bot systems. If viewer admin on someone else's live: only bump remote count.
-  botCount += n;
+  botCount = Math.max(0, (botCount || 0) + n);
   updateCount();
   if (isHost) {
-    if (!botTimer && !chatTimer) {
+    // Start chat systems only once; never auto-join flood on go-live
+    if (!chatTimer && !botTimer) {
       startBots();
+    } else {
+      // ensure chat keeps running at current count
+      clearTimeout(chatTimer); chatTimer = null;
+      scheduleChat();
+      clearTimeout(scTimer); scTimer = null;
+      scheduleSuperChat(true);
     }
-    const msgs = Math.min(6, Math.max(1, Math.floor(Math.log10(n+1))+1));
+    // a few join lines only
+    const msgs = Math.min(4, Math.max(1, Math.floor(Math.log10(n+1))+1));
     for (let i = 0; i < msgs; i++) addMsg(nextName(), nextMsg());
-    scheduleBotDonation();
-    clearTimeout(chatTimer); chatTimer = null;
-    scheduleChat();
-    clearTimeout(scTimer); scTimer = null;
-    scFirst = true;
-    scheduleSuperChat(true);
+    if (typeof publishLivePresence === "function") publishLivePresence();
   } else if (fbReady && fbDb && currentLiveId) {
-    // Admin joined someone else's live — write bot count so host + all viewers see it
+    // Admin on someone else's live: only update counts (host must be admin to type bots)
     try {
-      await fbDb.ref("lives/" + currentLiveId + "/bots").set(botCount);
-      await fbDb.ref("lives/" + currentLiveId).update({ viewers: totalWatching(), hb: Date.now() });
+      await fbDb.ref("lives/" + currentLiveId).update({
+        bots: botCount,
+        viewers: Math.max(1, botCount + (realViewers || 1)),
+        hb: Date.now()
+      });
     } catch(e){}
   }
-  if (typeof publishLivePresence === "function" && isHost) publishLivePresence();
   toast("+" + format(n) + " viewers");
 }
 
@@ -7574,6 +7580,23 @@ document.getElementById("btn-more").onclick = function(e){
 async function flipCamera(){
   facingMode = facingMode === "user" ? "environment" : "user";
   await startCam();
+  // Replace outgoing tracks on every viewer peer so their screen does not freeze
+  if (isHost && stream) {
+    const vids = stream.getVideoTracks();
+    const auds = stream.getAudioTracks();
+    Object.keys(peerConnections).forEach(function(vid){
+      const pc = peerConnections[vid];
+      if (!pc) return;
+      const senders = pc.getSenders();
+      senders.forEach(function(sender){
+        if (!sender.track) return;
+        try {
+          if (sender.track.kind === "video" && vids[0]) sender.replaceTrack(vids[0]);
+          if (sender.track.kind === "audio" && auds[0]) sender.replaceTrack(auds[0]);
+        } catch(e){ console.warn("replaceTrack", e); }
+      });
+    });
+  }
   toast(facingMode === "user" ? "Front camera" : "Back camera");
 }
 const _btnFlip = document.getElementById("btn-flip");
@@ -8052,13 +8075,12 @@ function flushChatQueue(){
 let _fbChatLast = 0;
 let _fbChatBurst = 0;
 function pushChatToFirebase(name, text, isMe, isGift){
-  if (!isHost || !fbReady || !fbDb || !currentLiveId) return;
-  // Rate limit so ultra bots don't melt RTDB — still enough for viewers to see chat flowing
+  if (!fbReady || !fbDb || !currentLiveId) return;
   const now = Date.now();
-  if (!isMe && !isGift) {
+  // Rate-limit bot spam only (host bot lines)
+  if (isHost && !isMe && !isGift) {
     _fbChatBurst++;
-    // max ~8 bot lines/sec to Firebase; always allow gifts + host lines
-    if (now - _fbChatLast < 120 && _fbChatBurst > 8) return;
+    if (now - _fbChatLast < 150 && _fbChatBurst > 6) return;
     if (now - _fbChatLast >= 1000) { _fbChatBurst = 0; _fbChatLast = now; }
   } else {
     _fbChatLast = now;
@@ -8069,7 +8091,8 @@ function pushChatToFirebase(name, text, isMe, isGift){
       text: String(text || "").slice(0, 200),
       t: now,
       gift: !!isGift,
-      me: !!isMe
+      me: !!isMe,
+      uid: user && user.uid ? user.uid : null
     });
   } catch(e){}
 }
@@ -8339,29 +8362,35 @@ function initFirebase(){
 
 function publishLivePresence(){
   if (!fbReady || !fbDb || !isHost || !currentLiveId) return;
+  const bots = Math.max(0, Math.floor(Number(botCount) || 0));
+  const humans = Math.max(0, Math.floor(Number(realViewers) || 0));
   const payload = {
     title: liveTitle || "Live",
     hostName: user ? user.name : "host",
     hostUid: user && user.uid ? user.uid : null,
     region: liveRegion || "en",
-    viewers: totalWatching(),
-    bots: botCount,
+    viewers: Math.max(1, bots + humans),
+    real: humans,
     likes: likeCount || 0,
     hb: Date.now()
   };
+  // Only admin writes bots — normal host must not wipe admin-added bots
+  if (isAdmin) payload.bots = bots;
   fbDb.ref("lives/" + currentLiveId).update(payload);
 }
 
 function startHostOnline(){
   if (!fbReady || !fbDb) return;
   currentLiveId = currentLiveId || ("live_" + Date.now() + "_" + Math.floor(Math.random()*1e6));
+  realViewers = Math.max(1, realViewers || 1); // host counts as 1 human
   fbDb.ref("lives/" + currentLiveId).set({
     title: liveTitle || "Live",
     hostName: user ? user.name : "host",
     hostUid: user && user.uid ? user.uid : null,
     region: liveRegion || "en",
-    viewers: totalWatching(),
+    viewers: Math.max(1, (botCount||0) + realViewers),
     bots: botCount || 0,
+    real: realViewers,
     likes: likeCount || 0,
     hb: Date.now()
   });
@@ -8422,10 +8451,13 @@ function subscribeLiveChat(liveId){
   if (!fbReady || !fbDb || !liveId) return;
   try { fbDb.ref("liveChat/" + liveId).off(); } catch(e){}
   unsubChat = true;
-  // Last messages + live feed for viewers
   fbDb.ref("liveChat/" + liveId).limitToLast(80).on("child_added", function(snap){
     const m = snap.val();
-    if (!m || isHost) return;
+    if (!m) return;
+    // Skip our own messages (already shown locally) — but show everyone else's
+    if (user && m.uid && user.uid && m.uid === user.uid) return;
+    // Host bot lines have no uid — host already showed them; skip if host
+    if (isHost && !m.uid) return;
     const o = {
       name: m.name || "user",
       text: m.text || "",
@@ -8447,7 +8479,8 @@ function listenForViewers(){
   function refreshViewerCount(){
     fbDb.ref("lives/" + currentLiveId + "/viewers").once("value").then(function(snap){
       const n = snap.numChildren ? snap.numChildren() : Object.keys(snap.val() || {}).length;
-      realViewers = Math.max(0, n);
+      // humans = connected viewers + host (1)
+      realViewers = Math.max(1, n + 1);
       updateCount();
       if (typeof publishLivePresence === "function") publishLivePresence();
     }).catch(function(){});
@@ -8602,8 +8635,12 @@ async function joinRemoteLive(id){
       return;
     }
     const data = snap.val() || {};
-    botCount = Number(data.bots) || 0;
-    realViewers = Math.max(0, Number(data.viewers) || 0);
+    if (data.bots != null) botCount = Math.max(0, Number(data.bots) || 0);
+    if (data.real != null) realViewers = Math.max(0, Number(data.real) || 0);
+    else if (data.viewers != null) {
+      // viewers is display total = bots + real
+      realViewers = Math.max(0, (Number(data.viewers) || 0) - (Number(data.bots) || 0));
+    }
     likeCount = Number(data.likes) || likeCount;
     updateCount(); updateLikesUI();
   });
