@@ -7132,12 +7132,24 @@ function subscribeHostBotCount(liveId){
     const prev = botCount;
     botCount = v;
     updateCount();
-    if (isAdmin) {
-      if (v > 0 && !chatTimer && !botTimer) startBots();
+    // Host keeps bots running even after admin leaves
+    if (v > 0) {
+      if (!chatTimer) startBots();
+    } else {
+      stopBots();
     }
-    // If poll is running, start bot voting when bots appear
+    // Chat speed from admin
+    // (also subscribed below)
     if (v > 0 && pollState && !pollState.done && !pollState._remote) {
       if (prev <= 0) schedulePollVotes();
+    }
+  });
+  // Listen chat speed remote control
+  fbDb.ref("lives/" + liveId + "/chatSpeed").on("value", function(snap){
+    const spd = snap.val();
+    if (spd && typeof spd === "string") {
+      chatSpeed = spd;
+      try { localStorage.setItem("gl_chat_speed", spd); } catch(e){}
     }
   });
 }
@@ -7777,14 +7789,17 @@ function startRemoteBotRelay(){
   let giftNext = Date.now() + 12000;
 
   function chatDelay(b){
-    if (b < 5) return 2200 + Math.random()*2200;
-    if (b < 20) return 1200 + Math.random()*1200;
-    if (b < 80) return 700 + Math.random()*600;
-    if (b < 300) return 350 + Math.random()*300;
-    if (b < 1000) return 180 + Math.random()*160;
-    if (b < 5000) return 100 + Math.random()*90;
-    if (b < 20000) return 65 + Math.random()*50;
-    return 45 + Math.random()*35;
+    let d;
+    if (b < 5) d = 2200 + Math.random()*2200;
+    else if (b < 20) d = 1200 + Math.random()*1200;
+    else if (b < 80) d = 700 + Math.random()*600;
+    else if (b < 300) d = 350 + Math.random()*300;
+    else if (b < 1000) d = 180 + Math.random()*160;
+    else if (b < 5000) d = 100 + Math.random()*90;
+    else if (b < 20000) d = 65 + Math.random()*50;
+    else d = 45 + Math.random()*35;
+    const f = (typeof speedFactor === "function") ? speedFactor() : 1;
+    return Math.max(16, d * f);
   }
   function giftDelay(b){
     // match scheduleBotDonation
@@ -7862,7 +7877,50 @@ function startRemoteBotRelay(){
   // first SC wait uses same first-stream delay as host
   scNext = Date.now() + Math.max(8000, (typeof scAvgMs === "function" ? scAvgMs(Math.max(1, botCount)) : 120000) * 0.8);
   giftNext = Date.now() + giftDelay(Math.max(1, botCount));
+  // Follow remote chat speed changes
+  try {
+    fbDb.ref("lives/" + currentLiveId + "/chatSpeed").on("value", function(snap){
+      const spd = snap.val();
+      if (spd && typeof spd === "string") chatSpeed = spd;
+    });
+  } catch(e){}
   remoteRelayTimer = setTimeout(tick, 500);
+}
+
+
+let joinAnnounceTimer = null;
+function announceJoins(count, names){
+  // Cap announcements so 1M bots don't spam forever
+  const maxAnn = 80;
+  const n = Math.min(Math.max(0, Math.floor(count)), maxAnn);
+  if (n <= 0) return;
+  let i = 0;
+  function next(){
+    if (i >= n || !currentLiveId) return;
+    const nm = (names && names[i]) ? names[i] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
+    const phrases = [
+      nm + " joined",
+      nm + " joined the live",
+      nm + " is here",
+      "Welcome " + nm
+    ];
+    const text = phrases[Math.floor(Math.random() * phrases.length)];
+    if (isHost) {
+      addMsg(nm, text, false);
+    } else if (fbReady && fbDb) {
+      try {
+        fbDb.ref("liveChat/" + currentLiveId).push({
+          name: nm, text: text, t: Date.now(), gift: false, me: false, uid: null, bot: true, join: true
+        });
+      } catch(e){}
+    }
+    i++;
+    // Stagger: ~120–400ms, a bit faster if many
+    const gap = n > 40 ? (80 + Math.random()*120) : (120 + Math.random()*280);
+    joinAnnounceTimer = setTimeout(next, gap);
+  }
+  clearTimeout(joinAnnounceTimer);
+  next();
 }
 
 async function addBotsBatch(n){
@@ -7871,30 +7929,41 @@ async function addBotsBatch(n){
   botCount = Math.max(0, (botCount || 0) + n);
   updateCount();
   if (isHost) {
-    // Start chat systems only once; never auto-join flood on go-live
-    if (!chatTimer && !botTimer) {
+    if (!chatTimer) {
       startBots();
     } else {
-      // ensure chat keeps running at current count
       clearTimeout(chatTimer); chatTimer = null;
       scheduleChat();
       clearTimeout(scTimer); scTimer = null;
       scheduleSuperChat(true);
     }
-    // a few join lines only
-    const msgs = Math.min(4, Math.max(1, Math.floor(Math.log10(n+1))+1));
-    for (let i = 0; i < msgs; i++) addMsg(nextName(), nextMsg());
+    // Staggered join lines (capped so 1M doesn't spam forever)
+    announceJoins(n);
     if (typeof publishLivePresence === "function") publishLivePresence();
+    // also write bots so presence is correct
+    if (fbReady && fbDb && currentLiveId) {
+      try {
+        await fbDb.ref("lives/" + currentLiveId).update({
+          bots: botCount,
+          viewers: Math.max(1, botCount + (realViewers || 1)),
+          chatSpeed: chatSpeed,
+          hb: Date.now()
+        });
+      } catch(e){}
+    }
   } else if (fbReady && fbDb && currentLiveId) {
     try {
       await fbDb.ref("lives/" + currentLiveId).update({
         bots: botCount,
         viewers: Math.max(1, botCount + (realViewers || 1)),
         real: realViewers || 1,
+        chatSpeed: chatSpeed,
         hb: Date.now()
       });
     } catch(e){}
+    // Host will startBots via subscribeHostBotCount — relay only while admin stays
     startRemoteBotRelay();
+    announceJoins(n);
   }
   toast("+" + format(n) + " viewers");
 }
@@ -7916,6 +7985,10 @@ sMenu.querySelectorAll(".b-opt").forEach(function(opt){
     sMenu.classList.remove("show");
     clearTimeout(chatTimer); chatTimer = null;
     if (isHost && currentLiveId) scheduleChat();
+    // Push speed to this live so host/relay use it (admin controlling someone else's live)
+    if (fbReady && fbDb && currentLiveId && isAdmin) {
+      try { fbDb.ref("lives/" + currentLiveId + "/chatSpeed").set(chatSpeed); } catch(e){}
+    }
     toast("Chat speed: " + chatSpeed);
   };
 });
@@ -8225,10 +8298,13 @@ function stopSuperChat(){ clearTimeout(scTimer); scTimer = null; scVoiceQueue.le
 
 /* ---------- BOT SIM ---------- */
 function startBots(){
-  if (!isAdmin) return; // never auto-spawn for normal accounts
+  // Anyone hosting can RUN bots once they exist. Only admin can ADD bots (addBotsBatch).
+  if (!isHost || !currentLiveId) return;
+  if (botCount <= 0) return;
   stopBots(); chatPhase = "greet"; scFirst = true;
   phaseTimer = setTimeout(function(){ chatPhase = "normal"; }, 22000);
-  botTimer = setTimeout(scheduleJoin, 3500);
+  // Don't auto grow bots for non-admin hosts
+  if (isAdmin) botTimer = setTimeout(scheduleJoin, 3500);
   scheduleChat(); scheduleLeave(); scheduleBotDonation(); scheduleSuperChat(false);
 }
 function stopBots(){
@@ -8267,10 +8343,12 @@ function scheduleLeave(){
       else if (botCount < 500) leave = 1 + Math.floor(Math.random()*2);
       else if (botCount < 5000) leave = 1 + Math.floor(Math.random()*4);
       else if (botCount < 50000) leave = 2 + Math.floor(Math.random()*6);
-      else if (botCount < 200000) leave = 3 + Math.floor(Math.random()*10); // ~3–12 on huge lives
+      else if (botCount < 200000) leave = 3 + Math.floor(Math.random()*10);
       else leave = 5 + Math.floor(Math.random()*12);
-      leave = Math.min(leave, Math.floor(botCount * 0.002) + 1); // hard cap ~0.2%
-      botCount = Math.max(0, botCount - leave);
+      leave = Math.min(leave, Math.floor(botCount * 0.002) + 1);
+      // Non-admin host: don't shrink bots admin set (keep count stable)
+      if (isAdmin) botCount = Math.max(0, botCount - leave);
+      else leave = 0;
       updateCount();
     }
     scheduleLeave();
@@ -8895,6 +8973,15 @@ function listenForViewers(){
     }
     createHostPeer(vid);
     refreshViewerCount();
+    // Join message for real viewers
+    const data = snap.val() || {};
+    const nm = data.name || "Viewer";
+    // skip very first moment of host self-noise
+    setTimeout(function(){
+      if (isHost && currentLiveId) {
+        addMsg(nm, nm + " joined the live", false);
+      }
+    }, 300);
   });
   fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_removed", function(snap){
     const vid = snap.key;
@@ -8983,11 +9070,18 @@ async function joinRemoteLive(id){
   const L = onlineLives[id];
   if (!L) { toast("Live ended"); return; }
 
-  // Leave previous cleanly
+  // Leave previous cleanly (important for re-join same live — avoids frozen video)
   if (viewerId && currentLiveId && fbDb) {
     try { await fbDb.ref("lives/" + currentLiveId + "/viewers/" + viewerId).remove(); } catch(e){}
   }
+  if (viewerPC) {
+    try { viewerPC.ontrack = null; viewerPC.onicecandidate = null; viewerPC.onconnectionstatechange = null; viewerPC.close(); } catch(e){}
+    viewerPC = null;
+  }
   cleanupViewerListeners();
+  window._joinTries = 0;
+  // Give host a moment to drop the old peer before we re-register
+  await new Promise(function(r){ setTimeout(r, 350); });
 
   isHost = false;
   currentLiveId = id;
@@ -9110,18 +9204,16 @@ async function joinRemoteLive(id){
     fbDb.ref("lives/" + id + "/signals/" + viewerId + "/viewerCandidates").push(e.candidate.toJSON());
   };
 
-  let offerHandled = false;
+  let lastOfferTs = 0;
   fbDb.ref("lives/" + id + "/signals/" + viewerId + "/offer").on("value", async function(snap){
     const offer = snap.val();
     if (!offer || !viewerPC) return;
-    // allow re-offers (ice restart) by comparing ts
     try {
-      if (offerHandled && !offer.restart && !offer.ts) return;
-      // if restart flag or new ts, renegotiate
-      if (offerHandled && offer.restart) {
-        // full renegotiate
-      } else if (offerHandled) return;
-      offerHandled = true;
+      const ots = Number(offer.ts || offer.restart || 0);
+      if (ots && ots === lastOfferTs) return;
+      if (ots) lastOfferTs = ots;
+      else if (lastOfferTs && !offer.restart) return;
+      lastOfferTs = ots || Date.now();
       await viewerPC.setRemoteDescription(new RTCSessionDescription({ type: offer.type, sdp: offer.sdp }));
       remoteSet = true;
       const answer = await viewerPC.createAnswer();
