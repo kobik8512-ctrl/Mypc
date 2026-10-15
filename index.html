@@ -219,6 +219,7 @@ body.is-admin .more-row.admin-only{display:flex !important}
 <div id="live-room" class="screen">
   <div id="video-wrap">
     <video id="local-video" autoplay playsinline muted></video>
+    <video id="remote-video" autoplay playsinline style="display:none;width:100%;height:100%;object-fit:cover;position:absolute;inset:0;background:#000"></video>
     <div class="cam-off" id="cam-off"><div class="icon">📷</div><div>Camera off</div></div>
   </div>
   <div class="live-header">
@@ -322,6 +323,15 @@ const CONTEXT_RATE = 0.75;
 let user = null, isHost = false, isAdmin = false, adminClicks = 0;
 let onlineLives = {}; // id -> live meta
 let fbReady = false, fbAuth = null, fbDb = null;
+let peerConnections = {};
+let viewerPC = null, viewerId = null;
+let unsubViewers = null, unsubLiveMeta = null, unsubChat = null;
+const ICE_SERVERS = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+]};
 let liveTitle = "", currentLiveId = null;
 let stream = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
@@ -7080,19 +7090,34 @@ document.getElementById("btn-start").onclick = async function(){
 async function startHost(title){
   isHost = true;
   liveTitle = title;
-  currentLiveId = "offline-" + Date.now();
+  currentLiveId = "live-" + Date.now() + "-" + Math.floor(Math.random()*1e5);
   botCount = 0; realViewers = 0; likeCount = 0; hasLiked = false; chatPhase = "greet";
+  peerConnections = {};
   document.getElementById("live-title-text").textContent = title;
   document.getElementById("chat-list").replaceChildren();
   document.getElementById("btn-like").classList.remove("liked");
+  const lv = document.getElementById("local-video");
+  const rv = document.getElementById("remote-video");
+  if (lv) { lv.style.display = "block"; }
+  if (rv) { rv.style.display = "none"; rv.srcObject = null; }
   updateCount(); updateLikesUI(); updateCoinsUI();
   show("live-room");
   await startCam();
-  startBots();
+  // Bots ONLY for admin (or special email after admin unlock)
+  if (isAdmin || (user && user.email === "kobik8512@gmail.com" && isAdmin)) {
+    startBots();
+  } else {
+    stopBots();
+    botCount = 0;
+    updateCount();
+  }
   startLikeSim();
   startRealSim();
   startListening();
-  toast(liveRegion === "ge" ? "ლაივი · Georgia server 🇬🇪" : "You're live · English server");
+  if (typeof startHostOnline === "function") startHostOnline();
+  if (typeof listenForViewers === "function") listenForViewers();
+  if (typeof subscribeLiveChat === "function") subscribeLiveChat(currentLiveId);
+  toast(liveRegion === "ge" ? "Live · Georgia server" : "You're live · English server");
   try {
     const pill = document.querySelector(".live-pill");
     if (pill && !document.getElementById("region-badge")) {
@@ -7138,8 +7163,15 @@ function stopCam(){
 document.getElementById("btn-leave").onclick = endLive;
 function endLive(){
   stopBots(); stopLikeSim(); stopRealSim(); stopListening(); stopCam();
+  if (typeof cleanupViewerListeners === "function") cleanupViewerListeners();
+  if (isHost && fbReady && fbDb && currentLiveId && viewerId) {
+    // noop
+  }
+  if (!isHost && fbReady && fbDb && currentLiveId && viewerId) {
+    try { fbDb.ref("lives/" + currentLiveId + "/viewers/" + viewerId).remove(); } catch(e){}
+  }
   if (typeof stopHostOnline === "function") stopHostOnline();
-  isHost = false; currentLiveId = null; botCount = 0;
+  isHost = false; currentLiveId = null; botCount = 0; viewerId = null;
   show("menu");
   if (typeof renderLiveList === "function") renderLiveList();
   toast("Live ended");
@@ -7477,19 +7509,32 @@ bMenu.querySelectorAll(".b-opt").forEach(function(opt){
 document.addEventListener("click", function(e){ if (bMenu && !bMenu.contains(e.target)) bMenu.classList.remove("show"); });
 
 async function addBotsBatch(n){
+  if (!isAdmin) { toast("Admin only"); return; }
   n = Math.floor(Number(n)) || 1;
+  // If host is admin: run local bot systems. If viewer admin on someone else's live: only bump remote count.
   botCount += n;
   updateCount();
-  const msgs = Math.min(6, Math.max(1, Math.floor(Math.log10(n+1))+1));
-  for (let i = 0; i < msgs; i++) addMsg(nextName(), nextMsg());
-  scheduleBotDonation();
-  clearTimeout(chatTimer); chatTimer = null;
-  scheduleChat();
-  // reschedule SC immediately with new viewer count
-  clearTimeout(scTimer); scTimer = null;
-  scFirst = true;
-  scheduleSuperChat(true);
-  toast("+" + format(n) + " bots");
+  if (isHost) {
+    if (!botTimer && !chatTimer) {
+      startBots();
+    }
+    const msgs = Math.min(6, Math.max(1, Math.floor(Math.log10(n+1))+1));
+    for (let i = 0; i < msgs; i++) addMsg(nextName(), nextMsg());
+    scheduleBotDonation();
+    clearTimeout(chatTimer); chatTimer = null;
+    scheduleChat();
+    clearTimeout(scTimer); scTimer = null;
+    scFirst = true;
+    scheduleSuperChat(true);
+  } else if (fbReady && fbDb && currentLiveId) {
+    // Admin joined someone else's live — write bot count so host + all viewers see it
+    try {
+      await fbDb.ref("lives/" + currentLiveId + "/bots").set(botCount);
+      await fbDb.ref("lives/" + currentLiveId).update({ viewers: totalWatching(), hb: Date.now() });
+    } catch(e){}
+  }
+  if (typeof publishLivePresence === "function" && isHost) publishLivePresence();
+  toast("+" + format(n) + " viewers");
 }
 
 
@@ -7777,6 +7822,7 @@ function stopSuperChat(){ clearTimeout(scTimer); scTimer = null; scVoiceQueue.le
 
 /* ---------- BOT SIM ---------- */
 function startBots(){
+  if (!isAdmin) return; // never auto-spawn for normal accounts
   stopBots(); chatPhase = "greet"; scFirst = true;
   phaseTimer = setTimeout(function(){ chatPhase = "normal"; }, 22000);
   botTimer = setTimeout(scheduleJoin, 3500);
@@ -7873,6 +7919,8 @@ function scheduleChat(){
 }
 function startRealSim(){
   stopRealSim();
+  // Only admin streams get simulated background viewers
+  if (!isAdmin) return;
   realTimer = setInterval(function(){
     if (Math.random() < 0.35) {
       realViewers = Math.max(0, Math.min(8, realViewers + (Math.random() < 0.55 ? 1 : -1)));
@@ -8273,6 +8321,7 @@ function publishLivePresence(){
     region: liveRegion || "en",
     viewers: totalWatching(),
     bots: botCount,
+    likes: likeCount || 0,
     hb: Date.now()
   };
   fbDb.ref("lives/" + currentLiveId).update(payload);
@@ -8286,8 +8335,9 @@ function startHostOnline(){
     hostName: user ? user.name : "host",
     hostUid: user && user.uid ? user.uid : null,
     region: liveRegion || "en",
-    viewers: 1,
-    bots: 0,
+    viewers: totalWatching(),
+    bots: botCount || 0,
+    likes: likeCount || 0,
     hb: Date.now()
   });
   if (window._hbTimer) clearInterval(window._hbTimer);
@@ -8311,46 +8361,207 @@ function pushChatRemote(name, text, isMe){
   });
 }
 
+
+function cleanupViewerListeners(){
+  try { if (unsubChat) { fbDb.ref("liveChat/" + currentLiveId).off(); unsubChat = null; } } catch(e){}
+  try { if (unsubLiveMeta && currentLiveId) { fbDb.ref("lives/" + currentLiveId).off(); unsubLiveMeta = null; } } catch(e){}
+  try { if (unsubViewers && currentLiveId) { fbDb.ref("lives/" + currentLiveId + "/viewers").off(); unsubViewers = null; } } catch(e){}
+  if (viewerPC) { try { viewerPC.close(); } catch(e){} viewerPC = null; }
+  Object.keys(peerConnections).forEach(function(k){
+    try { peerConnections[k].close(); } catch(e){}
+  });
+  peerConnections = {};
+}
+
 function subscribeLiveChat(liveId){
-  if (!fbReady || !fbDb) return;
-  fbDb.ref("liveChat/" + liveId).limitToLast(40).on("child_added", function(snap){
+  if (!fbReady || !fbDb || !liveId) return;
+  try { fbDb.ref("liveChat/" + liveId).off(); } catch(e){}
+  unsubChat = true;
+  fbDb.ref("liveChat/" + liveId).limitToLast(50).on("child_added", function(snap){
     const m = snap.val();
     if (!m) return;
-    // avoid double-add for own local echo if needed
-    if (typeof addMsg === "function") addMsg(m.name, m.text, !!m.me);
+    // Host already shows own messages locally — skip echo for host
+    if (isHost) return;
+    if (typeof addMsg === "function") {
+      const o = { name: m.name, text: m.text, host: !!m.me, gift: !!m.gift, _remote: true };
+      chatQueue.push(o);
+      scheduleChatRender();
+    }
   });
 }
 
-function joinRemoteLive(id){
+function listenForViewers(){
+  if (!fbReady || !fbDb || !currentLiveId || !isHost) return;
+  try { fbDb.ref("lives/" + currentLiveId + "/viewers").off(); } catch(e){}
+  unsubViewers = true;
+  fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_added", function(snap){
+    const vid = snap.key;
+    if (!vid || peerConnections[vid]) return;
+    createHostPeer(vid);
+  });
+  fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_removed", function(snap){
+    const vid = snap.key;
+    if (peerConnections[vid]) {
+      try { peerConnections[vid].close(); } catch(e){}
+      delete peerConnections[vid];
+    }
+  });
+}
+
+async function createHostPeer(viewerId){
+  if (!stream) {
+    for (let i = 0; i < 30 && !stream; i++) await new Promise(function(r){ setTimeout(r, 100); });
+  }
+  if (!stream || !fbDb || !currentLiveId) return;
+  try { await fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId).remove(); } catch(e){}
+  const pc = new RTCPeerConnection(ICE_SERVERS);
+  peerConnections[viewerId] = pc;
+  stream.getTracks().forEach(function(track){
+    try { pc.addTrack(track, stream); } catch(e){}
+  });
+  const pendingViewerIce = [];
+  let remoteSet = false;
+  pc.onicecandidate = function(e){
+    if (!e.candidate || !currentLiveId) return;
+    fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/hostCandidates").push(e.candidate.toJSON());
+  };
+  let answerDone = false;
+  fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/answer").on("value", async function(snap){
+    const answer = snap.val();
+    if (!answer || answerDone || pc.signalingState === "closed") return;
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      answerDone = true;
+      remoteSet = true;
+      while (pendingViewerIce.length) {
+        const c = pendingViewerIce.shift();
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
+      }
+    } catch(e){}
+  });
+  fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/viewerCandidates").on("child_added", function(snap){
+    const c = snap.val();
+    if (!c) return;
+    if (!remoteSet) { pendingViewerIce.push(c); return; }
+    pc.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
+  });
+  try {
+    const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+    await pc.setLocalDescription(offer);
+    await fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/offer").set({
+      type: pc.localDescription.type,
+      sdp: pc.localDescription.sdp
+    });
+  } catch(e){ console.warn("host offer", e); }
+}
+
+async function joinRemoteLive(id){
   const L = onlineLives[id];
   if (!L) { toast("Live ended"); return; }
+  cleanupViewerListeners();
   isHost = false;
   currentLiveId = id;
   liveTitle = L.title || "Live";
   liveRegion = L.region || "en";
-  botCount = L.bots || 0;
-  realViewers = Math.max(0, (L.viewers || 1) - 1);
+  botCount = Number(L.bots) || 0;
+  realViewers = Math.max(0, (Number(L.viewers) || 1));
+  likeCount = Number(L.likes) || 0;
+  document.getElementById("live-title-text").textContent = liveTitle;
+  document.getElementById("chat-list").replaceChildren();
+  document.getElementById("btn-like").classList.remove("liked");
+  const lv = document.getElementById("local-video");
+  const rv = document.getElementById("remote-video");
+  const camOff = document.getElementById("cam-off");
+  if (lv) { lv.style.display = "none"; lv.srcObject = null; }
+  if (rv) { rv.style.display = "none"; rv.srcObject = null; }
+  if (camOff) camOff.style.display = "flex";
+  const st = document.getElementById("mic-status");
+  if (st) { st.textContent = "Connecting..."; st.style.color = "var(--muted)"; }
+  updateCount(); updateLikesUI();
   show("live-room");
-  if (typeof updateWatchers === "function") updateWatchers();
+  toast("Joining " + liveTitle + "...");
+
   subscribeLiveChat(id);
-  // follow remote bot count
+
   if (fbReady && fbDb) {
-    fbDb.ref("lives/" + id + "/bots").on("value", function(s){
-      botCount = s.val() || 0;
-      if (typeof updateWatchers === "function") updateWatchers();
-    });
-    fbDb.ref("lives/" + id + "/viewers").on("value", function(s){
-      // display uses totalWatching
+    unsubLiveMeta = true;
+    fbDb.ref("lives/" + id).on("value", function(snap){
+      if (!snap.exists()) {
+        if (currentLiveId === id && !isHost) {
+          toast("Live ended");
+          endLive();
+        }
+        return;
+      }
+      const data = snap.val() || {};
+      botCount = Number(data.bots) || 0;
+      realViewers = Math.max(0, Number(data.viewers) || 0);
+      likeCount = Number(data.likes) || likeCount;
+      updateCount(); updateLikesUI();
     });
   }
-  toast("Joined " + liveTitle);
-  // viewers don't own camera
+
+  // WebRTC receive host camera + mic
+  if (!fbReady || !fbDb) return;
+  viewerId = "v" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
   try {
-    const v = document.getElementById("local-video");
-    if (v) v.style.display = "none";
-    const c = document.getElementById("cam-off");
-    if (c) c.style.display = "flex";
+    await fbDb.ref("lives/" + id + "/viewers/" + viewerId).set({
+      name: user ? user.name : "Viewer",
+      joinedAt: Date.now()
+    });
   } catch(e){}
+
+  viewerPC = new RTCPeerConnection(ICE_SERVERS);
+  try {
+    viewerPC.addTransceiver("video", { direction: "recvonly" });
+    viewerPC.addTransceiver("audio", { direction: "recvonly" });
+  } catch(e){}
+
+  const pendingHostIce = [];
+  let remoteSet = false;
+  function showRemoteStream(mediaStream){
+    if (!rv || !mediaStream) return;
+    rv.srcObject = mediaStream;
+    rv.style.display = "block";
+    if (camOff) camOff.style.display = "none";
+    if (st) { st.textContent = "Connected"; st.style.color = "var(--green)"; }
+    rv.play().catch(function(){});
+  }
+  viewerPC.ontrack = function(e){
+    if (e.streams && e.streams[0]) showRemoteStream(e.streams[0]);
+    else if (e.track) showRemoteStream(new MediaStream([e.track]));
+  };
+  viewerPC.onicecandidate = function(e){
+    if (!e.candidate || !currentLiveId) return;
+    fbDb.ref("lives/" + id + "/signals/" + viewerId + "/viewerCandidates").push(e.candidate.toJSON());
+  };
+
+  let offerHandled = false;
+  fbDb.ref("lives/" + id + "/signals/" + viewerId + "/offer").on("value", async function(snap){
+    const offer = snap.val();
+    if (!offer || offerHandled || !viewerPC) return;
+    offerHandled = true;
+    try {
+      await viewerPC.setRemoteDescription(new RTCSessionDescription(offer));
+      remoteSet = true;
+      const answer = await viewerPC.createAnswer();
+      await viewerPC.setLocalDescription(answer);
+      await fbDb.ref("lives/" + id + "/signals/" + viewerId + "/answer").set({
+        type: viewerPC.localDescription.type,
+        sdp: viewerPC.localDescription.sdp
+      });
+      while (pendingHostIce.length) {
+        const c = pendingHostIce.shift();
+        try { await viewerPC.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
+      }
+    } catch(e){ console.warn("viewer answer", e); }
+  });
+  fbDb.ref("lives/" + id + "/signals/" + viewerId + "/hostCandidates").on("child_added", function(snap){
+    const c = snap.val();
+    if (!c) return;
+    if (!remoteSet) { pendingHostIce.push(c); return; }
+    viewerPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
+  });
 }
 
 function afterLogin(u, displayName){
