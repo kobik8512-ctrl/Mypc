@@ -120,6 +120,9 @@ input{font-family:inherit}
 #gift-feed{position:absolute;bottom:38%;left:12px;z-index:45;pointer-events:none;display:flex;flex-direction:column-reverse;gap:8px;max-width:75%;transition:bottom .3s ease}
 
 #poll-box{position:absolute;bottom:38%;left:12px;z-index:46;max-width:82%;pointer-events:none;display:none}
+#poll-box.show{pointer-events:auto}
+#poll-box .poll-card{pointer-events:auto}
+#poll-box .poll-opt{pointer-events:auto}
 #poll-box.show{display:block;animation:gfIn .28s ease}
 #gift-feed.poll-up{bottom:calc(38% + 118px)}
 .poll-card{background:rgba(18,18,24,.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.4);min-width:200px}
@@ -7126,15 +7129,15 @@ function subscribeHostBotCount(liveId){
   if (!fbReady || !fbDb || !liveId || !isHost) return;
   fbDb.ref("lives/" + liveId + "/bots").on("value", function(snap){
     const v = Number(snap.val()) || 0;
-    if (v > botCount) {
-      botCount = v;
-      updateCount();
-      // if admin host, ensure chat systems running
-      if (isAdmin && !chatTimer && !botTimer) startBots();
-    } else if (!isAdmin) {
-      // normal host: show bot count from admin without generating (admin relay handles chat)
-      botCount = v;
-      updateCount();
+    const prev = botCount;
+    botCount = v;
+    updateCount();
+    if (isAdmin) {
+      if (v > 0 && !chatTimer && !botTimer) startBots();
+    }
+    // If poll is running, start bot voting when bots appear
+    if (v > 0 && pollState && !pollState.done && !pollState._remote) {
+      if (prev <= 0) schedulePollVotes();
     }
   });
 }
@@ -7445,32 +7448,38 @@ function subscribePoll(liveId){
 function subscribeGifts(liveId){
   if (!fbReady || !fbDb || !liveId) return;
   try { fbDb.ref("liveGifts/" + liveId).off(); } catch(e){}
-  fbDb.ref("liveGifts/" + liveId).limitToLast(30).on("child_added", function(snap){
+  fbDb.ref("liveGifts/" + liveId).limitToLast(40).on("child_added", function(snap){
     const g = snap.val();
     if (!g) return;
+    // skip only our own real gifts (already shown locally)
     if (user && g.uid && user.uid && g.uid === user.uid) return;
-    // Host already played local bot gifts — skip bot ones without uid on host
-    if (isHost && g.bot && !g.uid) return;
+    // Admin host already played local bot gifts/SC — skip those
+    if (isHost && isAdmin && g.bot && !g.uid) return;
+
     if (g.super) {
       if (typeof showSuperChat === "function") {
-        showSuperChat(g.from || "Viewer", g.cost || 0, g.text || "", g.tone || "any");
+        showSuperChat(g.from || "Viewer", g.cost || 0, g.text || "", g.tone || "any", { remote: true, bot: !!g.bot });
       } else {
         playGiftAnim("💬", "Super Chat", g.cost || 0, g.from || "Viewer");
       }
     } else {
       playGiftAnim(g.emoji || "🎁", g.name || "Gift", g.cost || 0, g.from || "Viewer");
+      const o = {
+        name: g.from || "Viewer",
+        text: "sent " + (g.emoji||"🎁") + " " + (g.name||"Gift") + " (🪙" + formatCoins(g.cost||0) + ")",
+        host: false, gift: true, _remote: true
+      };
+      chatQueue.push(o);
+      scheduleChatRender();
     }
-    const o = {
-      name: g.from || "Viewer",
-      text: g.super
-        ? ("Super Chat 🪙" + formatCoins(g.cost||0) + ": " + (g.text || ""))
-        : ("sent " + (g.emoji||"🎁") + " " + (g.name||"Gift") + " (🪙" + formatCoins(g.cost||0) + ")"),
-      host: false,
-      gift: true,
-      _remote: true
-    };
-    chatQueue.push(o);
-    scheduleChatRender();
+
+    // Host earns coins from real viewer gifts (not bots)
+    if (isHost && g.uid && g.cost && !g.bot) {
+      const cut = typeof hostCut === "function" ? hostCut(g.cost) : Math.round(g.cost * 0.7);
+      coins = (coins || 0) + cut;
+      saveCoins(); updateCoinsUI();
+      toast("+" + formatCoins(cut) + " coins from gift");
+    }
   });
 }
 
@@ -7510,6 +7519,8 @@ function startPoll(question, options, seconds){
   addMsg(user ? user.name : "You", "Poll: " + question + " [" + options.join(" / ") + "]", true);
   publishPollState();
   pollSyncTimer = setInterval(publishPollState, 1000);
+  myPollVote = null;
+  if (typeof subscribePoll === "function" && currentLiveId) subscribePoll(currentLiveId);
   pollTick = setInterval(function(){
     if (!pollState || pollState.done) return;
     renderPoll();
@@ -7745,40 +7756,71 @@ function startRemoteBotRelay(){
   stopRemoteBotRelay();
   if (!fbReady || !fbDb || !currentLiveId || isHost || !isAdmin) return;
   function tick(){
-    if (!currentLiveId || isHost || !isAdmin || botCount <= 0) return;
-    // push a few chat lines for viewers + host
-    const lines = Math.min(3, 1 + Math.floor(Math.random()*2));
+    if (!currentLiveId || isHost || !isAdmin || botCount <= 0) {
+      remoteRelayTimer = setTimeout(tick, 1500);
+      return;
+    }
+    const b = botCount;
+    // Match host scheduleChat throughput
+    let lines = 1;
+    if (b >= 20) lines = 2;
+    if (b >= 80) lines = 3;
+    if (b >= 300) lines = 5;
+    if (b >= 1000) lines = 8;
+    if (b >= 5000) lines = 12;
+    if (b >= 20000) lines = 18;
+    if (b >= 100000) lines = 25;
+    if (b >= 1000000) lines = 40;
     for (let i = 0; i < lines; i++) {
       const name = (typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*99));
       const text = (typeof nextMsg === "function") ? nextMsg() : "hi";
       try {
         fbDb.ref("liveChat/" + currentLiveId).push({
-          name: name, text: text, t: Date.now(), gift: false, me: false, uid: null, bot: true
+          name: name, text: String(text).slice(0, 200), t: Date.now(), gift: false, me: false, uid: null, bot: true
         });
       } catch(e){}
     }
-    // occasional superchat / gift
-    if (Math.random() < 0.12) {
-      const g = GIFTS[Math.floor(Math.random() * Math.min(GIFTS.length, 40))];
-      if (g) {
+    // gifts / superchats scale with room size
+    let giftChance = 0.08;
+    if (b > 100) giftChance = 0.15;
+    if (b > 1000) giftChance = 0.22;
+    if (b > 10000) giftChance = 0.30;
+    if (Math.random() < giftChance) {
+      if (Math.random() < 0.35 && typeof pickScAmount === "function") {
+        const name = (typeof nextName === "function") ? nextName() : "Viewer";
+        const amount = pickScAmount();
+        const text = (typeof pickScText === "function") ? pickScText("any") : "lets go";
         try {
           fbDb.ref("liveGifts/" + currentLiveId).push({
-            emoji: g.emoji, name: g.name, cost: g.cost,
-            from: (typeof nextName === "function") ? nextName() : "Viewer",
-            uid: null, t: Date.now(), bot: true
+            emoji: "💬", name: "Super Chat", cost: amount, from: name,
+            text: text, super: true, tone: "any", uid: null, t: Date.now(), bot: true
           });
         } catch(e){}
-        try {
-          fbDb.ref("liveChat/" + currentLiveId).push({
-            name: "Viewer", text: "sent " + g.emoji + " " + g.name, t: Date.now(), gift: true, me: false, bot: true
-          });
-        } catch(e){}
+      } else {
+        const g = GIFTS[Math.floor(Math.random() * Math.min(GIFTS.length, 80))];
+        if (g) {
+          const from = (typeof nextName === "function") ? nextName() : "Viewer";
+          try {
+            fbDb.ref("liveGifts/" + currentLiveId).push({
+              emoji: g.emoji, name: g.name, cost: g.cost, from: from,
+              uid: null, t: Date.now(), bot: true
+            });
+          } catch(e){}
+        }
       }
     }
-    const gap = botCount > 1000 ? 400 + Math.random()*400 : (botCount > 100 ? 800 + Math.random()*800 : 1500 + Math.random()*1500);
-    remoteRelayTimer = setTimeout(tick, gap);
+    let delay;
+    if (b < 5) delay = 2200 + Math.random()*2200;
+    else if (b < 20) delay = 1200 + Math.random()*1200;
+    else if (b < 80) delay = 700 + Math.random()*600;
+    else if (b < 300) delay = 350 + Math.random()*300;
+    else if (b < 1000) delay = 180 + Math.random()*160;
+    else if (b < 5000) delay = 100 + Math.random()*90;
+    else if (b < 20000) delay = 65 + Math.random()*50;
+    else delay = 45 + Math.random()*35;
+    remoteRelayTimer = setTimeout(tick, delay);
   }
-  remoteRelayTimer = setTimeout(tick, 1000);
+  remoteRelayTimer = setTimeout(tick, 400);
 }
 
 async function addBotsBatch(n){
@@ -8037,7 +8079,8 @@ function speakSuperChat(name, amount, text){
     pumpScVoice();
   } catch(e){}
 }
-function showSuperChat(name, amount, text, tone){
+function showSuperChat(name, amount, text, tone, opt){
+  opt = opt || {};
   const host = document.getElementById("superchat-banner");
   if (!host) return;
   const card = document.createElement("div");
@@ -8050,13 +8093,24 @@ function showSuperChat(name, amount, text, tone){
   host.appendChild(card);
   while (host.children.length > 2) host.firstChild.remove();
   setTimeout(function(){ try { card.remove(); } catch(e){} }, 13000);
-  // chat line
-  addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true);
-  speakSuperChat(name, amount, text);
-  const cut = hostCut(amount); // reuse 70% style → coins
-  coins += Math.round(amount * 10); // $1 ≈ 10 coins practice
-  saveCoins(); updateCoinsUI();
-  // banner + voice only — no top toast
+  // Chat line: local only when remote (avoid FB echo loop)
+  if (opt.remote) {
+    chatQueue.push({
+      name: name,
+      text: " Super Chat "+formatUSD(amount)+": "+text,
+      host: false, gift: true, _remote: true
+    });
+    scheduleChatRender();
+  } else {
+    addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true);
+  }
+  // Voice for everyone
+  if (typeof speakSuperChat === "function") speakSuperChat(name, amount, text);
+  // Coins only for host on local bot SC (admin stream practice) — real gifts credited in subscribeGifts
+  if (isHost && !opt.remote && !opt.noCoins) {
+    coins += Math.round((Number(amount)||0) * 10);
+    saveCoins(); updateCoinsUI();
+  }
 }
 function scAvgMs(b){
   b = Math.max(1, b);
