@@ -119,7 +119,7 @@ input{font-family:inherit}
 
 #gift-feed{position:absolute;bottom:38%;left:12px;z-index:45;pointer-events:none;display:flex;flex-direction:column-reverse;gap:8px;max-width:75%;transition:bottom .3s ease}
 
-#poll-box{position:absolute;bottom:38%;left:12px;z-index:46;max-width:82%;pointer-events:none;display:none}
+#poll-box{position:absolute;bottom:38%;left:12px;z-index:80;max-width:82%;pointer-events:none;display:none}
 #poll-box.show{pointer-events:auto}
 #poll-box .poll-card{pointer-events:auto}
 #poll-box .poll-opt{pointer-events:auto}
@@ -338,6 +338,9 @@ const ICE_SERVERS = { iceServers: [
 let liveTitle = "", currentLiveId = null;
 let stream = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
+let chatWarmUntil = 0;
+let chatRampStart = 0;
+let chatFirstMsgAt = 0;
 let forcedPhrase = "";
 let forcedPhraseRate = 0.85;
 let chatSpeed = localStorage.getItem("gl_chat_speed") || "medium";
@@ -7412,6 +7415,19 @@ function applyRemotePoll(data){
     }, 4000);
   }
 }
+(function setupPollDelegation(){
+  const box = document.getElementById("poll-box");
+  if (!box || box._voteBound) return;
+  box._voteBound = true;
+  box.addEventListener("click", function(e){
+    const el = e.target.closest(".poll-opt");
+    if (!el || !el.classList.contains("voteable")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = Number(el.getAttribute("data-idx"));
+    if (!isNaN(idx)) votePoll(idx);
+  });
+})();
 function votePoll(idx){
   if (!pollState || pollState.done) return;
   if (isHost) { toast("Host can't vote"); return; }
@@ -7465,6 +7481,21 @@ function subscribePoll(liveId){
     });
   }
 }
+
+const _seenGifts = new Set();
+function giftDedupeKey(g){
+  return [g.from||"", g.cost||0, g.name||"", g.super?1:0, Math.floor((g.t||0)/2000)].join("|");
+}
+function shouldShowGift(g){
+  const k = giftDedupeKey(g);
+  if (_seenGifts.has(k)) return false;
+  _seenGifts.add(k);
+  if (_seenGifts.size > 200) {
+    const first = _seenGifts.values().next().value;
+    _seenGifts.delete(first);
+  }
+  return true;
+}
 function subscribeGifts(liveId){
   if (!fbReady || !fbDb || !liveId) return;
   try { fbDb.ref("liveGifts/" + liveId).off(); } catch(e){}
@@ -7475,6 +7506,8 @@ function subscribeGifts(liveId){
     if (user && g.uid && user.uid && g.uid === user.uid) return;
     // Admin host already played local bot gifts/SC — skip those
     if (isHost && isAdmin && g.bot && !g.uid) return;
+    // Prevent double banner/anim
+    if (typeof shouldShowGift === "function" && !shouldShowGift(g)) return;
 
     if (g.super) {
       if (typeof showSuperChat === "function") {
@@ -7548,7 +7581,7 @@ function startPoll(question, options, seconds){
   box.classList.add("show");
   addMsg(user ? user.name : "You", "Poll: " + question + " [" + options.join(" / ") + "]", true);
   publishPollState();
-  pollSyncTimer = setInterval(publishPollState, 1000);
+  pollSyncTimer = setInterval(publishPollState, 2000);
   myPollVote = null;
   if (typeof subscribePoll === "function" && currentLiveId) subscribePoll(currentLiveId);
   pollTick = setInterval(function(){
@@ -7785,6 +7818,13 @@ function stopRemoteBotRelay(){
 function startRemoteBotRelay(){
   stopRemoteBotRelay();
   if (!fbReady || !fbDb || !currentLiveId || isHost || !isAdmin) return;
+  // Same warmup as host: silent 0–6s, first msg 7–30s, then ramp
+  const _now = Date.now();
+  chatWarmUntil = _now + 6000;
+  window._earlyChirpDone = false;
+  chatFirstMsgAt = _now + 7000 + Math.random() * 23000;
+  chatRampStart = chatFirstMsgAt;
+  chatPhase = "silent";
   let scNext = Date.now() + (typeof scAvgMs === "function" ? scAvgMs(Math.max(1, botCount)) : 120000);
   let giftNext = Date.now() + 12000;
 
@@ -7820,16 +7860,50 @@ function startRemoteBotRelay(){
     const b = Math.max(1, botCount);
     const now = Date.now();
 
+    // Warmup: mostly quiet; 1–2 early lines at ~3–5s, main start 7–30s
+    let warming = (chatFirstMsgAt && now < chatFirstMsgAt);
+    if (chatWarmUntil && now < chatWarmUntil) {
+      if (!window._earlyChirpDone && now >= (chatWarmUntil - 6000 + 3000)) {
+        window._earlyChirpDone = true;
+        const n = 1 + (Math.random() < 0.55 ? 1 : 0);
+        for (let i = 0; i < n; i++) {
+          const name = (typeof nextName === "function") ? nextName() : "user";
+          const text = (typeof nextMsg === "function") ? nextMsg() : "hi";
+          try {
+            fbDb.ref("liveChat/" + currentLiveId).push({
+              name: name, text: String(text).slice(0, 200), t: now, gift: false, me: false, uid: null, bot: true
+            });
+          } catch(e){}
+        }
+      }
+      warming = true; // still no full chat until firstMsgAt
+    }
+    let rampMul = 1;
+    if (!warming && chatRampStart && chatPhase !== "normal") {
+      let rampLen = botCount >= 1000000 ? 8000 : (botCount >= 1000 ? 14000 : 18000);
+      const p = Math.min(1, (now - chatRampStart) / rampLen);
+      if (p < 0.2) rampMul = 6;
+      else if (p < 0.45) rampMul = 3;
+      else if (p < 0.7) rampMul = 1.8;
+      else rampMul = 1.2;
+      if (p >= 1) chatPhase = "normal";
+    }
+
     // --- chat batch (same as host scheduleChat) ---
-    let lines = 1;
-    if (b >= 20) lines = 2;
-    if (b >= 80) lines = 3;
-    if (b >= 300) lines = 5;
-    if (b >= 1000) lines = 8;
-    if (b >= 5000) lines = 12;
-    if (b >= 20000) lines = 18;
-    if (b >= 100000) lines = 25;
-    if (b >= 1000000) lines = 40;
+    let lines = 0;
+    if (!warming) {
+      lines = 1;
+      if (b >= 20) lines = 2;
+      if (b >= 80) lines = 3;
+      if (b >= 300) lines = 5;
+      if (b >= 1000) lines = 8;
+      if (b >= 5000) lines = 12;
+      if (b >= 20000) lines = 18;
+      if (b >= 100000) lines = 25;
+      if (b >= 1000000) lines = 40;
+      // during ramp send fewer
+      if (rampMul > 1.5) lines = Math.max(1, Math.floor(lines / rampMul));
+    }
     for (let i = 0; i < lines; i++) {
       const name = (typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*99));
       const text = (typeof nextMsg === "function") ? nextMsg() : "hi";
@@ -7872,7 +7946,7 @@ function startRemoteBotRelay(){
       } catch(e){}
     }
 
-    remoteRelayTimer = setTimeout(tick, chatDelay(b));
+    remoteRelayTimer = setTimeout(tick, Math.max(40, chatDelay(b) * (warming ? 1 : rampMul)));
   }
   // first SC wait uses same first-stream delay as host
   scNext = Date.now() + Math.max(8000, (typeof scAvgMs === "function" ? scAvgMs(Math.max(1, botCount)) : 120000) * 0.8);
@@ -7899,14 +7973,16 @@ function announceJoins(count, names){
     if (i >= n || !currentLiveId) return;
     const nm = (names && names[i]) ? names[i] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
     const phrases = [
-      nm + " joined",
-      nm + " joined the live",
-      nm + " is here",
-      "Welcome " + nm
+      "joined the live",
+      "just joined",
+      "is here now",
+      "hopped in",
+      "entered the live",
+      "welcome to the party"
     ];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
     if (isHost) {
-      addMsg(nm, text, false);
+      addMsg(nm, text, false, false, { join: true });
     } else if (fbReady && fbDb) {
       try {
         fbDb.ref("liveChat/" + currentLiveId).push({
@@ -8229,24 +8305,27 @@ function showSuperChat(name, amount, text, tone, opt){
 }
 function scAvgMs(b){
   b = Math.max(1, b);
-  // user rates: 500k 5–6m · 1–2M 2–3m · 5–10M 30s–1m · 10M+ ~20s
+  // Low counts rarer; huge rooms: first SC instant (forceReschedule), then short gaps
   if (b < 100) return 12 * 60000;
   if (b < 1000) return 9 * 60000;
   if (b < 10000) return 7 * 60000;
   if (b < 50000) return 6 * 60000;
   if (b < 200000) return 5.5 * 60000;
-  if (b < 500000) return 5.5 * 60000;   // ~500k band → 5–6 min with jitter
-  if (b < 1000000) return 5 * 60000;
-  if (b < 2000000) return 2.5 * 60000;  // 1–2M → 2–3 min
-  if (b < 5000000) return 90 * 1000;
-  if (b < 10000000) return 45 * 1000;   // 5–10M → ~30s–1 min
-  return 20 * 1000;                     // 10M+ → ~20s
+  if (b < 500000) return 4 * 60000;     // ~4 min
+  if (b < 1000000) return 90 * 1000;    // ~1.5 min under 1M
+  if (b < 2000000) return 25 * 1000;    // 1M+ ~25s between
+  if (b < 5000000) return 15 * 1000;
+  if (b < 10000000) return 10 * 1000;
+  return 7 * 1000;                      // 10M+ ~7s
 }
 let scFirst = true;
 function fireOneSuperChat(){
   if (!isHost || !currentLiveId || botCount <= 0) return;
   const name = nextName();
   const amount = pickScAmount();
+  if (typeof shouldShowGift === "function") {
+    shouldShowGift({ from: name, cost: amount, name: "Super Chat", super: true, t: Date.now() });
+  }
   const r = Math.random();
   let tone = "any";
   if (r < 0.14) tone = "hate";
@@ -8276,9 +8355,9 @@ function scheduleSuperChat(forceReschedule){
   const avgMs = scAvgMs(botCount);
   let delay;
   // Instant only when room is already huge (millions) — not for 100 bots
-  if (forceReschedule && botCount >= 1000000) {
+  if (forceReschedule && botCount >= 100000) {
     scFirst = false;
-    delay = 500 + Math.random() * 1000;
+    delay = 400 + Math.random() * 900; // instant first donation when you add a big wave
   } else if (scFirst) {
     scFirst = false;
     // first SC of the stream still uses normal scaled wait
@@ -8301,8 +8380,28 @@ function startBots(){
   // Anyone hosting can RUN bots once they exist. Only admin can ADD bots (addBotsBatch).
   if (!isHost || !currentLiveId) return;
   if (botCount <= 0) return;
-  stopBots(); chatPhase = "greet"; scFirst = true;
-  phaseTimer = setTimeout(function(){ chatPhase = "normal"; }, 22000);
+  stopBots();
+  scFirst = true;
+  // Warmup: 0–6s silent (joins only), first chat randomly 7–30s, then ramp to full
+  const now = Date.now();
+  chatWarmUntil = now + 6000; // quiet period (with 1–2 early chirps at 3–5s)
+  window._earlyChirpDone = false;
+  // first real message between 7–30s
+  const firstGap = 7000 + Math.random() * 23000;
+  chatFirstMsgAt = now + firstGap;
+  // ramp finishes ~8–20s after first msg (faster if many bots)
+  let rampLen = 18000;
+  if (botCount >= 1000) rampLen = 14000;
+  if (botCount >= 100000) rampLen = 10000;
+  if (botCount >= 1000000) rampLen = 8000;
+  if (botCount < 20) rampLen = 22000;
+  chatRampStart = chatFirstMsgAt;
+  chatPhase = "silent";
+  clearTimeout(phaseTimer);
+  phaseTimer = setTimeout(function(){
+    chatPhase = "warming";
+  }, Math.max(0, chatFirstMsgAt - Date.now()));
+  setTimeout(function(){ chatPhase = "normal"; }, Math.max(0, chatFirstMsgAt + rampLen - Date.now()));
   // Don't auto grow bots for non-admin hosts
   if (isAdmin) botTimer = setTimeout(scheduleJoin, 3500);
   scheduleChat(); scheduleLeave(); scheduleBotDonation(); scheduleSuperChat(false);
@@ -8373,27 +8472,88 @@ function scheduleChat(){
     chatTimer = setTimeout(scheduleChat, 1200);
     return;
   }
+  const now = Date.now();
+  // --- Early drip: ~3–5s allow 1–2 messages so it's not dead silent ---
+  if (chatWarmUntil && now < chatWarmUntil) {
+    // schedule one early chirp once in the 3–5s window
+    if (!window._earlyChirpDone && now >= (chatWarmUntil - 6000 + 3000)) {
+      window._earlyChirpDone = true;
+      const n = 1 + (Math.random() < 0.55 ? 1 : 0); // 1 or 2
+      for (let i = 0; i < n; i++) addMsg(nextName(), nextMsg());
+    }
+    chatTimer = setTimeout(scheduleChat, Math.min(400, chatWarmUntil - now + 50));
+    return;
+  }
+  // --- WAIT for main first-message window (7–30s) ---
+  if (chatFirstMsgAt && now < chatFirstMsgAt) {
+    chatTimer = setTimeout(scheduleChat, Math.min(800, chatFirstMsgAt - now + 50));
+    return;
+  }
+
   const f = speedFactor();
-  let delay;
-  if (botCount < 5) delay = 2200 + Math.random()*2200;
-  else if (botCount < 20) delay = 1200 + Math.random()*1200;
-  else if (botCount < 80) delay = 700 + Math.random()*600;
-  else if (botCount < 300) delay = 350 + Math.random()*300;
-  else if (botCount < 1000) delay = 180 + Math.random()*160;
-  else if (botCount < 5000) delay = 100 + Math.random()*90;
-  else if (botCount < 20000) delay = 65 + Math.random()*50;
-  else delay = 45 + Math.random()*35;
-  delay = Math.max(chatSpeed === 'ultra' ? 16 : 28, delay * f);
+  // Base full-speed delay by bot count
+  let base;
+  if (botCount < 5) base = 2200 + Math.random()*2200;
+  else if (botCount < 20) base = 1200 + Math.random()*1200;
+  else if (botCount < 80) base = 700 + Math.random()*600;
+  else if (botCount < 300) base = 350 + Math.random()*300;
+  else if (botCount < 1000) base = 180 + Math.random()*160;
+  else if (botCount < 5000) base = 100 + Math.random()*90;
+  else if (botCount < 20000) base = 65 + Math.random()*50;
+  else base = 45 + Math.random()*35;
+
+  // Ramp: after first msg, slowly speed up to full (one… then few… then explode)
+  let rampMul = 1;
   let multi = 1;
-  if (botCount > 40) multi = 1 + (Math.random() < 0.5 ? 1 : 0);
-  if (botCount > 200) multi = 1 + Math.floor(Math.random()*2);
-  if (botCount > 1000) multi = 2 + Math.floor(Math.random()*2);
-  if (botCount > 8000) multi = 2 + Math.floor(Math.random()*3);
+  if (chatRampStart && chatPhase !== "normal") {
+    let rampLen = 18000;
+    if (botCount >= 1000) rampLen = 14000;
+    if (botCount >= 100000) rampLen = 10000;
+    if (botCount >= 1000000) rampLen = 8000;
+    if (botCount < 20) rampLen = 22000;
+    const elapsed = Math.max(0, now - chatRampStart);
+    const p = Math.min(1, elapsed / rampLen); // 0 → 1
+    // ease-in: slow start, then accelerate
+    const ease = p * p;
+    // early: very sparse (one message, long gaps)
+    if (p < 0.15) {
+      rampMul = 8 + Math.random() * 6;  // first drips
+      multi = 1;
+    } else if (p < 0.35) {
+      rampMul = 4 + Math.random() * 3;
+      multi = 1;
+    } else if (p < 0.55) {
+      rampMul = 2.2 + Math.random() * 1.5;
+      multi = 1 + (Math.random() < 0.4 ? 1 : 0);
+    } else if (p < 0.75) {
+      rampMul = 1.4 + Math.random() * 0.6;
+      multi = 1 + Math.floor(Math.random() * 2);
+    } else {
+      rampMul = 1 + (1 - ease) * 0.5;
+      multi = 1 + Math.floor(Math.random() * 2);
+    }
+    if (p >= 1) chatPhase = "normal";
+  } else {
+    // full speed multi
+    if (botCount > 40) multi = 1 + (Math.random() < 0.5 ? 1 : 0);
+    if (botCount > 200) multi = 1 + Math.floor(Math.random()*2);
+    if (botCount > 1000) multi = 2 + Math.floor(Math.random()*2);
+    if (botCount > 8000) multi = 2 + Math.floor(Math.random()*3);
+  }
   if (chatSpeed === "really") multi += 1;
   if (chatSpeed === "ultra") multi += 2;
   multi = Math.min(multi, chatSpeed === "ultra" ? 8 : 5);
+
+  let delay = Math.max(chatSpeed === "ultra" ? 16 : 28, base * f * rampMul);
+
   chatTimer = setTimeout(function(){
     if (!isHost || botCount <= 0) { scheduleChat(); return; }
+    // still in silent/wait? re-check
+    const n = Date.now();
+    if ((chatWarmUntil && n < chatWarmUntil) || (chatFirstMsgAt && n < chatFirstMsgAt)) {
+      scheduleChat();
+      return;
+    }
     for (let i = 0; i < multi; i++) addMsg(nextName(), nextMsg());
     scheduleChat();
   }, delay);
@@ -8486,17 +8646,32 @@ function flushChatQueue(){
   for (let i = 0; i < batch.length; i++) {
     const msg = batch[i];
     const div = document.createElement("div");
-    div.className = "msg" + (noAnim ? " msg-fast" : " msg-new") + (msg.host ? " host" : "") + (msg.gift ? " gift-msg" : "");
-    const cls = msg.host || msg.gift ? "" : colorClass(msg.name || "");
-    // single text node path is cheaper than many ops
-    const ns = document.createElement("span");
-    ns.className = "uname " + cls;
-    ns.textContent = msg.name || "";
-    const body = document.createElement("span");
-    body.className = "body";
-    body.textContent = msg.text || "";
-    div.appendChild(ns);
-    div.appendChild(body);
+    const isJoin = !!msg.join;
+    div.className = "msg" + (noAnim ? " msg-fast" : " msg-new") + (msg.host ? " host" : "") + (msg.gift ? " gift-msg" : "") + (isJoin ? " join-line" : "");
+    if (isJoin) {
+      const icon = document.createElement("span");
+      icon.className = "join-icon";
+      icon.textContent = "✨";
+      const ns = document.createElement("span");
+      ns.className = "uname";
+      ns.textContent = msg.name || "Someone";
+      const body = document.createElement("span");
+      body.className = "body";
+      body.textContent = msg.text || "joined the live";
+      div.appendChild(icon);
+      div.appendChild(ns);
+      div.appendChild(body);
+    } else {
+      const cls = msg.host || msg.gift ? "" : colorClass(msg.name || "");
+      const ns = document.createElement("span");
+      ns.className = "uname " + cls;
+      ns.textContent = msg.name || "";
+      const body = document.createElement("span");
+      body.className = "body";
+      body.textContent = msg.text || "";
+      div.appendChild(ns);
+      div.appendChild(body);
+    }
     frag.appendChild(div);
   }
   list.appendChild(frag);
@@ -8532,11 +8707,11 @@ function flushChatQueue(){
 }
 let _fbChatLast = 0;
 let _fbChatBurst = 0;
-function pushChatToFirebase(name, text, isMe, isGift){
+function pushChatToFirebase(name, text, isMe, isGift, extra){
   if (!fbReady || !fbDb || !currentLiveId) return;
   const now = Date.now();
-  // Rate-limit bot spam only (host bot lines)
-  if (isHost && !isMe && !isGift) {
+  // Rate-limit bot spam only (host bot lines) — never rate-limit joins
+  if (isHost && !isMe && !isGift && !(extra && extra.join)) {
     _fbChatBurst++;
     if (now - _fbChatLast < 150 && _fbChatBurst > 6) return;
     if (now - _fbChatLast >= 1000) { _fbChatBurst = 0; _fbChatLast = now; }
@@ -8544,14 +8719,16 @@ function pushChatToFirebase(name, text, isMe, isGift){
     _fbChatLast = now;
   }
   try {
-    fbDb.ref("liveChat/" + currentLiveId).push({
+    const payload = {
       name: String(name || "user").slice(0, 40),
       text: String(text || "").slice(0, 200),
       t: now,
       gift: !!isGift,
       me: !!isMe,
       uid: user && user.uid ? user.uid : null
-    });
+    };
+    if (extra && extra.join) payload.join = true;
+    fbDb.ref("liveChat/" + currentLiveId).push(payload);
   } catch(e){}
 }
 function addMsg(name, text, host, isGift, extra){
@@ -8562,7 +8739,7 @@ function addMsg(name, text, host, isGift, extra){
   if (chatQueue.length > qMax) chatQueue.splice(0, chatQueue.length - qMax);
   scheduleChatRender();
   // Broadcast to viewers (skip if this line already came FROM firebase)
-  if (!o._remote) pushChatToFirebase(name, text, !!host, !!isGift);
+  if (!o._remote) pushChatToFirebase(name, text, !!host, !!isGift, o);
 }
 document.getElementById("btn-send").onclick = sendMsg;
 document.getElementById("chat-input").onkeydown = function(e){ if (e.key === "Enter") sendMsg(); };
@@ -8942,6 +9119,7 @@ function subscribeLiveChat(liveId){
       text: m.text || "",
       host: !!m.me,
       gift: !!m.gift,
+      join: !!m.join,
       _remote: true
     };
     chatQueue.push(o);
@@ -8979,7 +9157,7 @@ function listenForViewers(){
     // skip very first moment of host self-noise
     setTimeout(function(){
       if (isHost && currentLiveId) {
-        addMsg(nm, nm + " joined the live", false);
+        addMsg(nm, "joined the live", false, false, { join: true });
       }
     }, 300);
   });
