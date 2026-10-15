@@ -8049,14 +8049,39 @@ function flushChatQueue(){
 
   if (chatQueue.length) scheduleChatRender();
 }
+let _fbChatLast = 0;
+let _fbChatBurst = 0;
+function pushChatToFirebase(name, text, isMe, isGift){
+  if (!isHost || !fbReady || !fbDb || !currentLiveId) return;
+  // Rate limit so ultra bots don't melt RTDB — still enough for viewers to see chat flowing
+  const now = Date.now();
+  if (!isMe && !isGift) {
+    _fbChatBurst++;
+    // max ~8 bot lines/sec to Firebase; always allow gifts + host lines
+    if (now - _fbChatLast < 120 && _fbChatBurst > 8) return;
+    if (now - _fbChatLast >= 1000) { _fbChatBurst = 0; _fbChatLast = now; }
+  } else {
+    _fbChatLast = now;
+  }
+  try {
+    fbDb.ref("liveChat/" + currentLiveId).push({
+      name: String(name || "user").slice(0, 40),
+      text: String(text || "").slice(0, 200),
+      t: now,
+      gift: !!isGift,
+      me: !!isMe
+    });
+  } catch(e){}
+}
 function addMsg(name, text, host, isGift, extra){
   const o = { name: name, text: text, host: !!host, gift: !!isGift };
   if (extra) Object.assign(o, extra);
   chatQueue.push(o);
-  // hard cap queue — never let it grow into lag
   const qMax = (chatSpeed === "ultra") ? 60 : (chatSpeed === "really" ? 90 : 150);
   if (chatQueue.length > qMax) chatQueue.splice(0, chatQueue.length - qMax);
   scheduleChatRender();
+  // Broadcast to viewers (skip if this line already came FROM firebase)
+  if (!o._remote) pushChatToFirebase(name, text, !!host, !!isGift);
 }
 document.getElementById("btn-send").onclick = sendMsg;
 document.getElementById("chat-input").onkeydown = function(e){ if (e.key === "Enter") sendMsg(); };
@@ -8373,20 +8398,45 @@ function cleanupViewerListeners(){
   peerConnections = {};
 }
 
+
+function cleanupViewerListeners(){
+  try {
+    if (fbDb && currentLiveId) {
+      fbDb.ref("liveChat/" + currentLiveId).off();
+      fbDb.ref("lives/" + currentLiveId).off();
+      fbDb.ref("lives/" + currentLiveId + "/viewers").off();
+    }
+  } catch(e){}
+  unsubChat = null; unsubLiveMeta = null; unsubViewers = null;
+  if (viewerPC) {
+    try { viewerPC.ontrack = null; viewerPC.onicecandidate = null; viewerPC.close(); } catch(e){}
+    viewerPC = null;
+  }
+  Object.keys(peerConnections).forEach(function(k){
+    try { peerConnections[k].close(); } catch(e){}
+  });
+  peerConnections = {};
+}
+
 function subscribeLiveChat(liveId){
   if (!fbReady || !fbDb || !liveId) return;
   try { fbDb.ref("liveChat/" + liveId).off(); } catch(e){}
   unsubChat = true;
-  fbDb.ref("liveChat/" + liveId).limitToLast(50).on("child_added", function(snap){
+  // Last messages + live feed for viewers
+  fbDb.ref("liveChat/" + liveId).limitToLast(80).on("child_added", function(snap){
     const m = snap.val();
-    if (!m) return;
-    // Host already shows own messages locally — skip echo for host
-    if (isHost) return;
-    if (typeof addMsg === "function") {
-      const o = { name: m.name, text: m.text, host: !!m.me, gift: !!m.gift, _remote: true };
-      chatQueue.push(o);
-      scheduleChatRender();
-    }
+    if (!m || isHost) return;
+    const o = {
+      name: m.name || "user",
+      text: m.text || "",
+      host: !!m.me,
+      gift: !!m.gift,
+      _remote: true
+    };
+    chatQueue.push(o);
+    const qMax = 80;
+    if (chatQueue.length > qMax) chatQueue.splice(0, chatQueue.length - qMax);
+    scheduleChatRender();
   });
 }
 
@@ -8394,10 +8444,23 @@ function listenForViewers(){
   if (!fbReady || !fbDb || !currentLiveId || !isHost) return;
   try { fbDb.ref("lives/" + currentLiveId + "/viewers").off(); } catch(e){}
   unsubViewers = true;
+  function refreshViewerCount(){
+    fbDb.ref("lives/" + currentLiveId + "/viewers").once("value").then(function(snap){
+      const n = snap.numChildren ? snap.numChildren() : Object.keys(snap.val() || {}).length;
+      realViewers = Math.max(0, n);
+      updateCount();
+      if (typeof publishLivePresence === "function") publishLivePresence();
+    }).catch(function(){});
+  }
   fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_added", function(snap){
     const vid = snap.key;
-    if (!vid || peerConnections[vid]) return;
+    if (!vid) return;
+    if (peerConnections[vid]) {
+      try { peerConnections[vid].close(); } catch(e){}
+      delete peerConnections[vid];
+    }
     createHostPeer(vid);
+    refreshViewerCount();
   });
   fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_removed", function(snap){
     const vid = snap.key;
@@ -8405,26 +8468,50 @@ function listenForViewers(){
       try { peerConnections[vid].close(); } catch(e){}
       delete peerConnections[vid];
     }
+    refreshViewerCount();
   });
 }
 
 async function createHostPeer(viewerId){
   if (!stream) {
-    for (let i = 0; i < 30 && !stream; i++) await new Promise(function(r){ setTimeout(r, 100); });
+    for (let i = 0; i < 40 && !stream; i++) await new Promise(function(r){ setTimeout(r, 100); });
   }
   if (!stream || !fbDb || !currentLiveId) return;
   try { await fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId).remove(); } catch(e){}
+  await new Promise(function(r){ setTimeout(r, 50); });
+
   const pc = new RTCPeerConnection(ICE_SERVERS);
   peerConnections[viewerId] = pc;
   stream.getTracks().forEach(function(track){
     try { pc.addTrack(track, stream); } catch(e){}
   });
+
   const pendingViewerIce = [];
   let remoteSet = false;
+
+  pc.onconnectionstatechange = function(){
+    const st = pc.connectionState;
+    if (st === "failed" || st === "disconnected") {
+      // try ICE restart once
+      try {
+        pc.createOffer({ iceRestart: true }).then(function(offer){
+          return pc.setLocalDescription(offer).then(function(){
+            return fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/offer").set({
+              type: pc.localDescription.type,
+              sdp: pc.localDescription.sdp,
+              restart: Date.now()
+            });
+          });
+        }).catch(function(){});
+      } catch(e){}
+    }
+  };
+
   pc.onicecandidate = function(e){
     if (!e.candidate || !currentLiveId) return;
     fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/hostCandidates").push(e.candidate.toJSON());
   };
+
   let answerDone = false;
   fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/answer").on("value", async function(snap){
     const answer = snap.val();
@@ -8437,20 +8524,23 @@ async function createHostPeer(viewerId){
         const c = pendingViewerIce.shift();
         try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
       }
-    } catch(e){}
+    } catch(e){ console.warn("host setRemote", e); }
   });
+
   fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/viewerCandidates").on("child_added", function(snap){
     const c = snap.val();
     if (!c) return;
     if (!remoteSet) { pendingViewerIce.push(c); return; }
     pc.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
   });
+
   try {
     const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
     await pc.setLocalDescription(offer);
     await fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/offer").set({
       type: pc.localDescription.type,
-      sdp: pc.localDescription.sdp
+      sdp: pc.localDescription.sdp,
+      ts: Date.now()
     });
   } catch(e){ console.warn("host offer", e); }
 }
@@ -8458,58 +8548,74 @@ async function createHostPeer(viewerId){
 async function joinRemoteLive(id){
   const L = onlineLives[id];
   if (!L) { toast("Live ended"); return; }
+
+  // Leave previous cleanly
+  if (viewerId && currentLiveId && fbDb) {
+    try { await fbDb.ref("lives/" + currentLiveId + "/viewers/" + viewerId).remove(); } catch(e){}
+  }
   cleanupViewerListeners();
+
   isHost = false;
   currentLiveId = id;
   liveTitle = L.title || "Live";
   liveRegion = L.region || "en";
   botCount = Number(L.bots) || 0;
-  realViewers = Math.max(0, (Number(L.viewers) || 1));
+  realViewers = Math.max(0, Number(L.viewers) || 1);
   likeCount = Number(L.likes) || 0;
   document.getElementById("live-title-text").textContent = liveTitle;
   document.getElementById("chat-list").replaceChildren();
   document.getElementById("btn-like").classList.remove("liked");
+
   const lv = document.getElementById("local-video");
   const rv = document.getElementById("remote-video");
   const camOff = document.getElementById("cam-off");
-  if (lv) { lv.style.display = "none"; lv.srcObject = null; }
-  if (rv) { rv.style.display = "none"; rv.srcObject = null; }
+  if (lv) { lv.style.display = "none"; try { lv.srcObject = null; } catch(e){} }
+  if (rv) {
+    rv.style.display = "none";
+    try { rv.srcObject = null; } catch(e){}
+    rv.setAttribute("playsinline", "");
+    rv.setAttribute("autoplay", "");
+    rv.muted = false;
+  }
   if (camOff) camOff.style.display = "flex";
   const st = document.getElementById("mic-status");
   if (st) { st.textContent = "Connecting..."; st.style.color = "var(--muted)"; }
+
   updateCount(); updateLikesUI();
   show("live-room");
   toast("Joining " + liveTitle + "...");
 
-  subscribeLiveChat(id);
-
-  if (fbReady && fbDb) {
-    unsubLiveMeta = true;
-    fbDb.ref("lives/" + id).on("value", function(snap){
-      if (!snap.exists()) {
-        if (currentLiveId === id && !isHost) {
-          toast("Live ended");
-          endLive();
-        }
-        return;
-      }
-      const data = snap.val() || {};
-      botCount = Number(data.bots) || 0;
-      realViewers = Math.max(0, Number(data.viewers) || 0);
-      likeCount = Number(data.likes) || likeCount;
-      updateCount(); updateLikesUI();
-    });
+  if (!fbReady || !fbDb) {
+    toast("Server not ready");
+    return;
   }
 
-  // WebRTC receive host camera + mic
-  if (!fbReady || !fbDb) return;
-  viewerId = "v" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+  subscribeLiveChat(id);
+
+  unsubLiveMeta = true;
+  fbDb.ref("lives/" + id).on("value", function(snap){
+    if (!snap.exists()) {
+      if (currentLiveId === id && !isHost) {
+        toast("Live ended");
+        endLive();
+      }
+      return;
+    }
+    const data = snap.val() || {};
+    botCount = Number(data.bots) || 0;
+    realViewers = Math.max(0, Number(data.viewers) || 0);
+    likeCount = Number(data.likes) || likeCount;
+    updateCount(); updateLikesUI();
+  });
+
+  // New viewer id every join so host always creates a fresh peer
+  viewerId = "v" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
   try {
     await fbDb.ref("lives/" + id + "/viewers/" + viewerId).set({
       name: user ? user.name : "Viewer",
       joinedAt: Date.now()
     });
-  } catch(e){}
+  } catch(e){ console.warn("register viewer", e); }
 
   viewerPC = new RTCPeerConnection(ICE_SERVERS);
   try {
@@ -8519,18 +8625,45 @@ async function joinRemoteLive(id){
 
   const pendingHostIce = [];
   let remoteSet = false;
+  let gotTrack = false;
+
   function showRemoteStream(mediaStream){
     if (!rv || !mediaStream) return;
+    gotTrack = true;
     rv.srcObject = mediaStream;
     rv.style.display = "block";
+    rv.muted = false;
     if (camOff) camOff.style.display = "none";
     if (st) { st.textContent = "Connected"; st.style.color = "var(--green)"; }
-    rv.play().catch(function(){});
+    const p = rv.play();
+    if (p && p.catch) p.catch(function(){
+      // autoplay block — try muted then unmute
+      rv.muted = true;
+      rv.play().then(function(){ rv.muted = false; }).catch(function(){});
+    });
   }
+
   viewerPC.ontrack = function(e){
     if (e.streams && e.streams[0]) showRemoteStream(e.streams[0]);
     else if (e.track) showRemoteStream(new MediaStream([e.track]));
   };
+
+  viewerPC.onconnectionstatechange = function(){
+    const cs = viewerPC && viewerPC.connectionState;
+    if (cs === "failed" || cs === "disconnected") {
+      if (st) { st.textContent = "Reconnecting..."; st.style.color = "var(--muted)"; }
+      // force re-register to trigger new host offer
+      setTimeout(function(){
+        if (!isHost && currentLiveId === id && viewerId) {
+          const old = viewerId;
+          fbDb.ref("lives/" + id + "/viewers/" + old).remove().catch(function(){});
+          // rejoin soft
+          joinRemoteLive(id);
+        }
+      }, 1500);
+    }
+  };
+
   viewerPC.onicecandidate = function(e){
     if (!e.candidate || !currentLiveId) return;
     fbDb.ref("lives/" + id + "/signals/" + viewerId + "/viewerCandidates").push(e.candidate.toJSON());
@@ -8539,10 +8672,16 @@ async function joinRemoteLive(id){
   let offerHandled = false;
   fbDb.ref("lives/" + id + "/signals/" + viewerId + "/offer").on("value", async function(snap){
     const offer = snap.val();
-    if (!offer || offerHandled || !viewerPC) return;
-    offerHandled = true;
+    if (!offer || !viewerPC) return;
+    // allow re-offers (ice restart) by comparing ts
     try {
-      await viewerPC.setRemoteDescription(new RTCSessionDescription(offer));
+      if (offerHandled && !offer.restart && !offer.ts) return;
+      // if restart flag or new ts, renegotiate
+      if (offerHandled && offer.restart) {
+        // full renegotiate
+      } else if (offerHandled) return;
+      offerHandled = true;
+      await viewerPC.setRemoteDescription(new RTCSessionDescription({ type: offer.type, sdp: offer.sdp }));
       remoteSet = true;
       const answer = await viewerPC.createAnswer();
       await viewerPC.setLocalDescription(answer);
@@ -8554,14 +8693,29 @@ async function joinRemoteLive(id){
         const c = pendingHostIce.shift();
         try { await viewerPC.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
       }
-    } catch(e){ console.warn("viewer answer", e); }
+    } catch(e){
+      console.warn("viewer answer", e);
+      offerHandled = false;
+    }
   });
+
   fbDb.ref("lives/" + id + "/signals/" + viewerId + "/hostCandidates").on("child_added", function(snap){
     const c = snap.val();
     if (!c) return;
     if (!remoteSet) { pendingHostIce.push(c); return; }
     viewerPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
   });
+
+  // If no track after 8s, retry join once
+  window._joinTries = (window._joinTries || 0) + 1;
+  setTimeout(function(){
+    if (!gotTrack && currentLiveId === id && !isHost && (window._joinTries || 0) < 3) {
+      if (st) st.textContent = "Retrying video...";
+      joinRemoteLive(id);
+    } else if (gotTrack) {
+      window._joinTries = 0;
+    }
+  }, 8000);
 }
 
 function afterLogin(u, displayName){
