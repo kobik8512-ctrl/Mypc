@@ -193,14 +193,14 @@ body.is-admin .more-row.admin-only{display:flex !important}
   <div class="login-box">
     <div class="login-logo">GO <span>LIVE</span></div>
     <div class="login-sub">Sign in with Google or create an account</div>
-    <button class="btn-enter" id="btn-google" style="background:#fff;color:#111;margin-bottom:8px">Continue with Google</button>
+    <button class="btn-enter" id="btn-google" type="button" style="background:#fff;color:#111;margin-bottom:8px" onclick="try{window.__goLiveGoogle&&window.__goLiveGoogle()}catch(e){alert(e)}">Continue with Google</button>
     <div id="login-status" style="text-align:center;color:#f87171;font-size:.8rem;min-height:1.2em;margin-bottom:8px"></div>
     <div style="text-align:center;color:var(--muted);font-size:.75rem;margin:6px 0">or</div>
     <input type="email" id="auth-email" placeholder="Email" autocomplete="email" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="password" id="auth-pass" placeholder="Password (min 6)" autocomplete="current-password" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="text" id="auth-name" placeholder="Display name (signup only)" maxlength="24" autocomplete="nickname" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
-    <button class="btn-enter" id="btn-login">Sign in</button>
-    <button class="btn-enter" id="btn-signup" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:#fff">Create account</button>
+    <button class="btn-enter" id="btn-login" type="button" onclick="try{window.__goLiveLogin&&window.__goLiveLogin()}catch(e){alert(e)}">Sign in</button>
+    <button class="btn-enter" id="btn-signup" type="button" onclick="try{window.__goLiveSignup&&window.__goLiveSignup()}catch(e){alert(e)}" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:#fff">Create account</button>
     <div class="login-note">Accounts are stored on the server. Display name alone cannot open someone else's account.</div>
   </div>
 </div>
@@ -9983,10 +9983,7 @@ function requireFirebase(){
 (function setupAuth(){
   function status(msg, ok){
     var el = document.getElementById("login-status");
-    if (el) {
-      el.style.color = ok ? "#4ade80" : "#f87171";
-      el.textContent = msg || "";
-    }
+    if (el) { el.style.color = ok ? "#4ade80" : "#f87171"; el.textContent = msg || ""; }
     try { toast(msg); } catch(e){}
     try { console.log("[auth]", msg); } catch(e){}
   }
@@ -9994,84 +9991,53 @@ function requireFirebase(){
     if (!e) return "Login failed";
     var c = e.code || "";
     if (c === "auth/unauthorized-domain")
-      return "Add kobik8512-ctrl.github.io in Firebase Auth → Authorized domains";
+      return "Firebase: add kobik8512-ctrl.github.io under Auth → Authorized domains";
     if (c === "auth/operation-not-allowed")
-      return "Enable Google + Email in Firebase Console → Sign-in method";
+      return "Enable Google + Email/Password in Firebase Sign-in method";
     if (c === "auth/popup-blocked" || c === "auth/popup-closed-by-user")
-      return "Popup blocked — trying redirect…";
-    if (c === "auth/invalid-credential" || c === "auth/wrong-password")
-      return "Wrong email or password";
-    if (c === "auth/user-not-found")
-      return "No account — tap Create account";
-    if (c === "auth/network-request-failed")
-      return "Network error";
-    return (e.message || c || "Login failed").slice(0, 120);
+      return "Popup blocked — using redirect…";
+    if (c === "auth/invalid-credential" || c === "auth/wrong-password") return "Wrong email or password";
+    if (c === "auth/user-not-found") return "No account — Create account first";
+    if (c === "auth/network-request-failed") return "Network error";
+    return String(e.message || c || "Login failed").slice(0, 140);
   }
 
-  // Init Firebase hard
-  var ok = false;
-  try {
-    ok = typeof initFirebase === "function" && initFirebase();
-  } catch(e) {
-    status("Firebase init error: " + (e.message || e));
-  }
-  if (!ok || !fbAuth) {
-    status("Server not ready — check Firebase scripts / config");
-    // still bind so user sees message on click
-  } else {
-    try {
-      fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
-    } catch(e){}
-  }
+  try { if (typeof initFirebase === "function") initFirebase(); } catch(e){ status("Init error"); }
 
-  // Redirect result (returns from Google on mobile)
   if (fbAuth) {
+    try { fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){}); } catch(e){}
     fbAuth.getRedirectResult().then(function(res){
-      if (res && res.user) {
-        status("Google OK — entering…", true);
-        afterLogin(res.user, res.user.displayName);
-      }
-    }).catch(function(e){
-      status(authErr(e));
-    });
+      if (res && res.user) { status("Google OK", true); afterLogin(res.user, res.user.displayName); }
+    }).catch(function(e){ status(authErr(e)); });
     fbAuth.onAuthStateChanged(function(u){
       if (u) afterLogin(u, u.displayName);
     });
   }
 
-  function doGoogle(){
+  window.__goLiveGoogle = function(){
     status("Starting Google…");
-    if (!fbAuth) {
-      try { initFirebase(); } catch(e){}
-    }
-    if (!fbAuth) {
-      status("Firebase Auth missing — refresh page");
+    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
+    if (typeof firebase === "undefined") { status("Firebase SDK not loaded — check internet"); return; }
+    if (!fbAuth) { status("Auth not ready — refresh"); return; }
+    var provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    // Mobile: redirect works; Desktop: popup then redirect fallback
+    var mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    if (mobile) {
+      status("Redirecting to Google…");
+      fbAuth.signInWithRedirect(provider).catch(function(e){ status(authErr(e)); });
       return;
     }
-    var provider = new firebase.auth.GoogleAuthProvider();
-    provider.addScope("email");
-    provider.setCustomParameters({ prompt: "select_account" });
-    var gbtn = document.getElementById("btn-google");
-    if (gbtn) gbtn.disabled = true;
-
-    // Always try popup first; on any fail use redirect (works on mobile)
     fbAuth.signInWithPopup(provider).then(function(res){
-      if (res && res.user) {
-        status("Signed in!", true);
-        afterLogin(res.user, res.user.displayName);
-      }
+      if (res && res.user) { status("Signed in!", true); afterLogin(res.user, res.user.displayName); }
     }).catch(function(e){
-      status(authErr(e) + " — redirecting…");
-      return fbAuth.signInWithRedirect(provider);
-    }).catch(function(e2){
-      status(authErr(e2));
-    }).finally(function(){
-      if (gbtn) gbtn.disabled = false;
+      status(authErr(e));
+      fbAuth.signInWithRedirect(provider).catch(function(e2){ status(authErr(e2)); });
     });
-  }
+  };
 
-  function doEmailLogin(){
-    if (!fbAuth && typeof initFirebase === "function") initFirebase();
+  window.__goLiveLogin = function(){
+    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
     if (!fbAuth) { status("Server not ready"); return; }
     var email = ((document.getElementById("auth-email") || {}).value || "").trim();
     var pass = ((document.getElementById("auth-pass") || {}).value || "");
@@ -10081,16 +10047,16 @@ function requireFirebase(){
       status("Signed in!", true);
       afterLogin(res.user, res.user.displayName);
     }).catch(function(e){ status(authErr(e)); });
-  }
+  };
 
-  function doSignup(){
-    if (!fbAuth && typeof initFirebase === "function") initFirebase();
+  window.__goLiveSignup = function(){
+    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
     if (!fbAuth) { status("Server not ready"); return; }
     var email = ((document.getElementById("auth-email") || {}).value || "").trim();
     var pass = ((document.getElementById("auth-pass") || {}).value || "");
     var name = ((document.getElementById("auth-name") || {}).value || "").trim().slice(0, 24);
     if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
-    if (name.length < 2) { status("Enter display name for signup"); return; }
+    if (name.length < 2) { status("Display name required for signup"); return; }
     status("Creating account…");
     fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
       return res.user.updateProfile({ displayName: name }).then(function(){
@@ -10098,36 +10064,19 @@ function requireFirebase(){
         afterLogin(res.user, name);
       });
     }).catch(function(e){ status(authErr(e)); });
-  }
+  };
 
   function bind(){
     var g = document.getElementById("btn-google");
     var li = document.getElementById("btn-login");
     var su = document.getElementById("btn-signup");
-    if (g) {
-      g.onclick = function(ev){
-        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-        doGoogle();
-      };
-    } else {
-      status("Google button missing in HTML");
-    }
-    if (li) li.onclick = function(ev){ if (ev) ev.preventDefault(); doEmailLogin(); };
-    if (su) su.onclick = function(ev){ if (ev) ev.preventDefault(); doSignup(); };
-    ["auth-email","auth-pass"].forEach(function(id){
-      var el = document.getElementById(id);
-      if (el) el.onkeydown = function(ev){ if (ev.key === "Enter") doEmailLogin(); };
-    });
+    if (g) g.onclick = function(ev){ if (ev) { ev.preventDefault(); } window.__goLiveGoogle(); };
+    if (li) li.onclick = function(ev){ if (ev) ev.preventDefault(); window.__goLiveLogin(); };
+    if (su) su.onclick = function(ev){ if (ev) ev.preventDefault(); window.__goLiveSignup(); };
   }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bind);
-  } else {
-    bind();
-  }
-  // Re-bind after short delay in case something overwrote handlers
-  setTimeout(bind, 500);
-  setTimeout(bind, 1500);
+  bind();
+  setTimeout(bind, 300);
+  setTimeout(bind, 1200);
 })();
 
 // Disable old name-only enter if still present
