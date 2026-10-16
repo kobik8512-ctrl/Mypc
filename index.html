@@ -33,8 +33,28 @@ input{font-family:inherit}
 .btn-secondary{background:transparent;color:var(--muted);font-size:.95rem;padding:12px;border-radius:999px;border:1px solid var(--border)}
 #live-room{position:relative;background:#000;height:100vh;height:100dvh;overflow:hidden}
 #video-wrap{position:absolute;inset:0;background:#0d0d10;display:flex;align-items:center;justify-content:center}
-#local-video{width:100%;height:100%;object-fit:cover;display:none}
+#local-video,#remote-video{width:100%;height:100%;object-fit:cover;display:none;background:#000}
 #local-video.mirror{transform:scaleX(-1)}
+#local-video.screen-fit,#remote-video.screen-fit{object-fit:contain;background:#000}
+#video-wrap.screen-mode{background:#000}
+/* Cinema / fullscreen watch mode — hide chrome */
+body.cinema-mode .chat-wrap,
+body.cinema-mode .chat-bar,
+body.cinema-mode #gift-feed,
+body.cinema-mode #superchat-banner,
+body.cinema-mode #poll-box,
+body.cinema-mode .stats-row,
+body.cinema-mode .mic-status,
+body.cinema-mode .live-header .header-btns .icon-btn:not(#btn-cinema):not(#btn-close),
+body.cinema-mode #more-menu,
+body.cinema-mode #b-menu,
+body.cinema-mode #s-menu{display:none!important}
+body.cinema-mode .live-header{opacity:.85}
+body.cinema-mode #btn-cinema{background:rgba(255,45,85,.45)}
+body.cinema-mode #video-wrap{/* full bleed */}
+.cinema-hint{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;padding:10px 16px;border-radius:999px;font-size:.8rem;z-index:120;pointer-events:none;opacity:0;transition:opacity .3s}
+.cinema-hint.show{opacity:1}
+
 .cam-off{text-align:center;color:var(--muted)}
 .cam-off .icon{font-size:3.5rem;margin-bottom:10px;opacity:.5}
 .live-header{position:absolute;top:0;left:0;right:0;padding:12px 12px 0;display:flex;justify-content:space-between;align-items:flex-start;z-index:40;pointer-events:none}
@@ -241,6 +261,7 @@ body.is-admin .more-row.admin-only{display:flex !important}
       <button class="icon-btn" id="btn-cam" title="Camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg></button>
       <button class="icon-btn" id="btn-flip" title="Flip camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0115.5-6.4M21 12a9 9 0 01-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg></button>
       <button class="icon-btn" id="btn-screen" title="Share screen" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <button class="icon-btn" id="btn-cinema" title="Cinema mode"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg></button>
       <button class="icon-btn" id="btn-more" title="More"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg></button>
     </div>
   </div>
@@ -339,6 +360,7 @@ body.is-admin .more-row.admin-only{display:flex !important}
   <input type="number" id="poll-custom-time" placeholder="Custom seconds (optional)" min="5" max="3600" inputmode="numeric"/>
   <div class="modal-actions"><button class="btn-cancel" id="ask-cancel">Cancel</button><button class="btn-confirm" id="ask-send">Start poll ➤</button></div>
 </div></div>
+<div id="cinema-hint" class="cinema-hint">Rotate phone sideways for bigger view · tap again to exit</div>
 <div id="toast"></div>
 
 
@@ -7317,6 +7339,9 @@ function resetMediaUI(){
   } catch(e){}
 }
 function endLive(){
+  try { document.body.classList.remove("cinema-mode"); cinemaMode = false; } catch(e){}
+  try { applyScreenFitToRemote(false); } catch(e){}
+
   const wasHost = isHost;
   const lid = currentLiveId;
   stopBots(); stopLikeSim(); stopRealSim(); stopListening(); stopCam();
@@ -9643,6 +9668,9 @@ async function joinRemoteLive(id){
     }
     likeCount = Number(data.likes) || likeCount;
     updateCount(); updateLikesUI();
+    if (typeof applyScreenFitToRemote === "function") {
+      applyScreenFitToRemote(!!data.screenShare);
+    }
   });
 
   // New viewer id every join so host always creates a fresh peer
@@ -9670,7 +9698,12 @@ async function joinRemoteLive(id){
     gotTrack = true;
     rv.srcObject = mediaStream;
     rv.style.display = "block";
+    rv.style.width = "100%";
+    rv.style.height = "100%";
     rv.muted = false;
+    try {
+      if (onlineLives[id] && onlineLives[id].screenShare) rv.classList.add("screen-fit");
+    } catch(e){}
     if (camOff) camOff.style.display = "none";
     if (st) { st.textContent = "Connected"; st.style.color = "var(--green)"; }
     const p = rv.play();
@@ -9925,36 +9958,68 @@ function replaceOutgoingTracks(newStream){
 }
 async function startScreenShare(){
   if (!isHost) { toast("Host only"); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    toast("Screen share not supported here");
+  var md = navigator.mediaDevices;
+  var shareFn = md && (md.getDisplayMedia || md.getDisplayMedia);
+  // Some Android builds expose it only on window.navigator
+  if (!shareFn && md && typeof md.getDisplayMedia === "function") shareFn = md.getDisplayMedia.bind(md);
+  if (!md || typeof md.getDisplayMedia !== "function") {
+    var isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    toast(isPhone
+      ? "Phone browser blocks screen share — use Chrome on a computer to share screen"
+      : "Screen share not available in this browser — try Chrome or Edge");
     return;
   }
   try {
-    var display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    toast("Pick what to share…");
+    var display = await md.getDisplayMedia({
+      video: { frameRate: 30 },
+      audio: true
+    });
     if (!display.getAudioTracks().length && stream) {
       var mic = stream.getAudioTracks()[0];
-      if (mic) display.addTrack(mic);
+      if (mic) try { display.addTrack(mic); } catch(e){}
     }
     isScreenSharing = true;
     stream = display;
     var v = document.getElementById("local-video");
-    if (v) { v.srcObject = stream; v.style.display = "block"; v.classList.remove("mirror"); }
+    if (v) {
+      v.srcObject = stream;
+      v.style.display = "block";
+      v.classList.remove("mirror");
+      v.classList.add("screen-fit"); // full screen visible, not cropped
+    }
+    var vw = document.getElementById("video-wrap");
+    if (vw) vw.classList.add("screen-mode");
+    // Tell viewers this is a screen share so they use contain too
+    try {
+      if (fbDb && currentLiveId) fbDb.ref("lives/" + currentLiveId + "/screenShare").set(true);
+    } catch(e){}
     var camOff = document.getElementById("cam-off");
     if (camOff) camOff.style.display = "none";
     replaceOutgoingTracks(stream);
     var btn = document.getElementById("btn-screen");
     if (btn) btn.style.display = "flex";
-    toast("Sharing screen");
+    toast("Sharing screen — viewers see it");
     var vt = display.getVideoTracks()[0];
     if (vt) vt.onended = function(){ stopScreenShare(); };
   } catch(e) {
-    toast(e && e.name === "NotAllowedError" ? "Cancelled" : "Could not share screen");
+    var n = e && e.name;
+    if (n === "NotAllowedError") toast("Screen share cancelled");
+    else if (n === "NotSupportedError" || n === "TypeError")
+      toast("This device blocks screen share — host screen from a computer");
+    else toast("Could not share screen");
+    console.warn(e);
   }
 }
 async function stopScreenShare(){
   if (!isScreenSharing) return;
   isScreenSharing = false;
   try { if (stream) stream.getTracks().forEach(function(tr){ try{tr.stop()}catch(e){} }); } catch(e){}
+  var v = document.getElementById("local-video");
+  if (v) v.classList.remove("screen-fit");
+  var vw = document.getElementById("video-wrap");
+  if (vw) vw.classList.remove("screen-mode");
+  try { if (fbDb && currentLiveId) fbDb.ref("lives/" + currentLiveId + "/screenShare").set(false); } catch(e){}
   try { if (typeof startCam === "function") await startCam(); } catch(e){}
   replaceOutgoingTracks(stream);
   toast("Camera back");
@@ -9965,6 +10030,55 @@ async function stopScreenShare(){
   // show screen btn when host goes live
   var _sh = typeof startHost === "function" ? startHost : null;
 })();
+
+
+// Cinema mode + screen-share fit for viewers
+var cinemaMode = false;
+function setCinemaMode(on){
+  cinemaMode = !!on;
+  document.body.classList.toggle("cinema-mode", cinemaMode);
+  var hint = document.getElementById("cinema-hint");
+  if (cinemaMode) {
+    if (hint) {
+      hint.textContent = "Rotate phone sideways for a bigger view · tap cinema again to exit";
+      hint.classList.add("show");
+      setTimeout(function(){ hint.classList.remove("show"); }, 3500);
+    }
+    try {
+      var de = document.documentElement;
+      if (de.requestFullscreen) de.requestFullscreen().catch(function(){});
+      else if (de.webkitRequestFullscreen) de.webkitRequestFullscreen();
+    } catch(e){}
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock("landscape").catch(function(){});
+      }
+    } catch(e){}
+  } else {
+    try {
+      if (document.exitFullscreen) document.exitFullscreen().catch(function(){});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } catch(e){}
+    try {
+      if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+    } catch(e){}
+  }
+  var b = document.getElementById("btn-cinema");
+  if (b) b.classList.toggle("muted", cinemaMode);
+}
+(function(){
+  var b = document.getElementById("btn-cinema");
+  if (b) b.onclick = function(e){
+    if (e) e.stopPropagation();
+    setCinemaMode(!cinemaMode);
+  };
+})();
+function applyScreenFitToRemote(on){
+  var rv = document.getElementById("remote-video");
+  var vw = document.getElementById("video-wrap");
+  if (rv) rv.classList.toggle("screen-fit", !!on);
+  if (vw) vw.classList.toggle("screen-mode", !!on);
+}
 
 // Guard admin tools: if not admin, ignore bots/speed/phrase
 (function(){
