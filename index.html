@@ -9914,7 +9914,7 @@ async function joinRemoteLive(id){
       }
     } catch(e){
       console.warn("viewer answer", e);
-      offerHandled = false;
+      /* offerHandled */;
     }
   });
 
@@ -10130,5 +10130,159 @@ setInterval(function(){
 
 })();
 </script>
+
+<script>
+/* Standalone login — runs even if main app script throws */
+(function(){
+  var CFG = {
+    apiKey: "AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo",
+    authDomain: "golive-ff5ad.firebaseapp.com",
+    projectId: "golive-ff5ad",
+    storageBucket: "golive-ff5ad.firebasestorage.app",
+    messagingSenderId: "994701431927",
+    appId: "1:994701431927:web:4e7615434facc5b54ae272",
+    databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com"
+  };
+
+  function status(msg, ok){
+    var el = document.getElementById("login-status");
+    if (el) {
+      el.style.color = ok ? "#4ade80" : "#f87171";
+      el.textContent = msg || "";
+    }
+    var toast = document.getElementById("toast");
+    if (toast && msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      setTimeout(function(){ toast.classList.remove("show"); }, 2500);
+    }
+  }
+
+  function goMenu(u, name){
+    try {
+      window.user = {
+        name: (name || u.displayName || (u.email && u.email.split("@")[0]) || "User").slice(0, 24),
+        uid: u.uid,
+        email: (u.email || "").toLowerCase()
+      };
+      var dn = document.getElementById("display-name");
+      if (dn) dn.textContent = window.user.name;
+      document.querySelectorAll(".screen").forEach(function(s){ s.classList.remove("active"); });
+      var menu = document.getElementById("menu");
+      if (menu) menu.classList.add("active");
+      status("Signed in as " + window.user.name, true);
+      // sync with main app if loaded
+      try {
+        if (typeof afterLogin === "function") afterLogin(u, window.user.name);
+        else if (typeof user !== "undefined") user = window.user;
+      } catch(e){}
+    } catch(e){
+      status("Login UI error: " + e.message);
+      alert("Logged in but could not open menu: " + e.message);
+    }
+  }
+
+  function getAuth(){
+    if (typeof firebase === "undefined") return null;
+    try {
+      if (!firebase.apps.length) firebase.initializeApp(CFG);
+      return firebase.auth();
+    } catch(e){
+      try { return firebase.auth(); } catch(e2){ return null; }
+    }
+  }
+
+  function errMsg(e){
+    if (!e) return "Failed";
+    var c = e.code || "";
+    if (c.indexOf("unauthorized-domain") >= 0)
+      return "Add kobik8512-ctrl.github.io in Firebase Authorized domains";
+    if (c.indexOf("operation-not-allowed") >= 0)
+      return "Enable Google & Email in Firebase Sign-in method";
+    if (c.indexOf("popup") >= 0) return "Popup blocked — try again";
+    if (c.indexOf("invalid-credential") >= 0 || c.indexOf("wrong-password") >= 0)
+      return "Wrong email or password";
+    if (c.indexOf("user-not-found") >= 0) return "No account — Create account";
+    return (e.message || c || "Failed").slice(0, 120);
+  }
+
+  window.__goLiveGoogle = function(){
+    status("Starting Google…");
+    var auth = getAuth();
+    if (!auth) { status("Firebase not loaded — check network / refresh"); return; }
+    var provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    var mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    if (mobile) {
+      status("Opening Google…");
+      auth.signInWithRedirect(provider).catch(function(e){ status(errMsg(e)); });
+      return;
+    }
+    auth.signInWithPopup(provider).then(function(res){
+      if (res && res.user) goMenu(res.user, res.user.displayName);
+    }).catch(function(e){
+      status(errMsg(e));
+      auth.signInWithRedirect(provider).catch(function(e2){ status(errMsg(e2)); });
+    });
+  };
+
+  window.__goLiveLogin = function(){
+    status("Signing in…");
+    var auth = getAuth();
+    if (!auth) { status("Firebase not loaded"); return; }
+    var email = (document.getElementById("auth-email").value || "").trim();
+    var pass = document.getElementById("auth-pass").value || "";
+    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
+    auth.signInWithEmailAndPassword(email, pass).then(function(res){
+      goMenu(res.user, res.user.displayName);
+    }).catch(function(e){ status(errMsg(e)); });
+  };
+
+  window.__goLiveSignup = function(){
+    status("Creating account…");
+    var auth = getAuth();
+    if (!auth) { status("Firebase not loaded"); return; }
+    var email = (document.getElementById("auth-email").value || "").trim();
+    var pass = document.getElementById("auth-pass").value || "";
+    var name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
+    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
+    if (name.length < 2) { status("Need display name"); return; }
+    auth.createUserWithEmailAndPassword(email, pass).then(function(res){
+      return res.user.updateProfile({ displayName: name }).then(function(){
+        goMenu(res.user, name);
+      });
+    }).catch(function(e){ status(errMsg(e)); });
+  };
+
+  function wire(){
+    var g = document.getElementById("btn-google");
+    var li = document.getElementById("btn-login");
+    var su = document.getElementById("btn-signup");
+    if (g) g.onclick = function(e){ e.preventDefault(); window.__goLiveGoogle(); };
+    if (li) li.onclick = function(e){ e.preventDefault(); window.__goLiveLogin(); };
+    if (su) su.onclick = function(e){ e.preventDefault(); window.__goLiveSignup(); };
+  }
+
+  var auth = getAuth();
+  if (auth) {
+    auth.getRedirectResult().then(function(res){
+      if (res && res.user) goMenu(res.user, res.user.displayName);
+    }).catch(function(e){ status(errMsg(e)); });
+    auth.onAuthStateChanged(function(u){
+      if (u) goMenu(u, u.displayName);
+    });
+  } else {
+    status("Waiting for Firebase…");
+    setTimeout(function(){
+      if (!getAuth()) status("Firebase SDK failed — use Chrome & refresh");
+      else wire();
+    }, 1500);
+  }
+  wire();
+  setTimeout(wire, 400);
+  setTimeout(wire, 2000);
+})();
+</script>
+
 </body>
 </html>
