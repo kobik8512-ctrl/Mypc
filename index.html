@@ -367,6 +367,13 @@ const ICE_SERVERS = { iceServers: [
 let liveTitle = "", currentLiveId = null;
 let stream = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
+let botAddMode = "instant";
+let joinWaveSpeed = "medium";
+try {
+  botAddMode = localStorage.getItem("gl_bot_mode") || "instant";
+  joinWaveSpeed = localStorage.getItem("gl_join_spd") || "medium";
+} catch(e){}
+
 let chatWarmUntil = 0;
 let chatRampStart = 0;
 let chatFirstMsgAt = 0;
@@ -7869,7 +7876,13 @@ if (bMenu) {
     };
   });
 }
-document.addEventListener("click", function(e){ if (bMenu && !bMenu.contains(e.target)) bMenu.classList.remove("show"); });
+document.addEventListener("click", function(e){
+  if (!bMenu || !bMenu.classList.contains("show")) return;
+  if (bMenu.contains(e.target)) return;
+  const mb = document.getElementById("more-bots");
+  if (mb && mb.contains(e.target)) return;
+  bMenu.classList.remove("show");
+});
 
 
 let remoteRelayTimer = null;
@@ -8323,10 +8336,15 @@ const phraseModal = document.getElementById("phrase-modal");
 
 document.getElementById("more-bots").onclick = function(e){
   e.stopPropagation();
-  moreMenu.classList.remove("show");
-  highlightBMenu();
+  e.preventDefault();
+  if (moreMenu) moreMenu.classList.remove("show");
+  if (sMenu) sMenu.classList.remove("show");
+  if (!bMenu) {
+    toast("Bot menu missing — hard refresh");
+    return;
+  }
+  try { highlightBMenu(); } catch(err){ console.warn(err); }
   bMenu.classList.add("show");
-  sMenu.classList.remove("show");
 };
 document.getElementById("more-speed").onclick = function(e){
   e.stopPropagation();
