@@ -9942,16 +9942,42 @@ setInterval(function(){
 var isScreenSharing = false;
 function replaceOutgoingTracks(newStream){
   if (!newStream || !isHost) return;
-  var vTrack = newStream.getVideoTracks()[0];
-  var aTrack = newStream.getAudioTracks()[0];
+  var vTrack = newStream.getVideoTracks()[0] || null;
+  var aTrack = newStream.getAudioTracks()[0] || null;
+  // Screen content: prioritize clarity + framerate for WebRTC encoder
+  if (vTrack) {
+    try { vTrack.contentHint = "detail"; } catch(e){}
+    try {
+      var s = vTrack.getSettings ? vTrack.getSettings() : {};
+      console.log("[share] track settings", s);
+    } catch(e){}
+  }
   Object.keys(peerConnections || {}).forEach(function(vid){
     var pc = peerConnections[vid];
     if (!pc) return;
     try {
       pc.getSenders().forEach(function(sender){
-        if (!sender.track) return;
-        if (sender.track.kind === "video" && vTrack) sender.replaceTrack(vTrack).catch(function(){});
-        if (sender.track.kind === "audio" && aTrack) sender.replaceTrack(aTrack).catch(function(){});
+        if (!sender.track && !vTrack && !aTrack) return;
+        if (sender.track && sender.track.kind === "video" && vTrack) {
+          sender.replaceTrack(vTrack).then(function(){
+            try {
+              var params = sender.getParameters();
+              if (!params.encodings || !params.encodings.length) {
+                params.encodings = [{}];
+              }
+              params.encodings.forEach(function(enc){
+                enc.maxFramerate = 30;
+                enc.maxBitrate = 3500000; // ~3.5 Mbps for readable screen
+                enc.degradationPreference = "maintain-framerate";
+              });
+              params.degradationPreference = "maintain-framerate";
+              sender.setParameters(params).catch(function(){});
+            } catch(e){}
+          }).catch(function(){});
+        }
+        if (sender.track && sender.track.kind === "audio" && aTrack) {
+          sender.replaceTrack(aTrack).catch(function(){});
+        }
       });
     } catch(e){}
   });
@@ -9959,54 +9985,81 @@ function replaceOutgoingTracks(newStream){
 async function startScreenShare(){
   if (!isHost) { toast("Host only"); return; }
   var md = navigator.mediaDevices;
-  var shareFn = md && (md.getDisplayMedia || md.getDisplayMedia);
-  // Some Android builds expose it only on window.navigator
-  if (!shareFn && md && typeof md.getDisplayMedia === "function") shareFn = md.getDisplayMedia.bind(md);
   if (!md || typeof md.getDisplayMedia !== "function") {
     var isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     toast(isPhone
-      ? "Phone browser blocks screen share — use Chrome on a computer to share screen"
-      : "Screen share not available in this browser — try Chrome or Edge");
+      ? "Phone browser blocks screen share — use Chrome on a computer"
+      : "Screen share not available — try Chrome or Edge");
     return;
   }
   try {
-    toast("Pick what to share…");
+    toast("Share your whole screen (not this browser tab)");
     var display = await md.getDisplayMedia({
-      video: { frameRate: 30 },
-      audio: true
+      video: {
+        displaySurface: "monitor",
+        frameRate: { ideal: 30, max: 30 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 }
+      },
+      audio: false,
+      // prefer current tab exclusion where supported
+      preferCurrentTab: false,
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+      systemAudio: "exclude"
     });
-    if (!display.getAudioTracks().length && stream) {
+    // Keep mic from camera stream
+    if (stream) {
       var mic = stream.getAudioTracks()[0];
-      if (mic) try { display.addTrack(mic); } catch(e){}
+      if (mic) {
+        try { display.addTrack(mic); } catch(e){}
+      }
     }
+    // Stop old video tracks only (keep mic if separate)
+    try {
+      if (stream) {
+        stream.getVideoTracks().forEach(function(tr){ try { tr.stop(); } catch(e){} });
+      }
+    } catch(e){}
+
     isScreenSharing = true;
     stream = display;
+
+    // CRITICAL: do NOT preview the shared screen in the live page —
+    // that creates a mirror loop and kills FPS. Show placeholder instead.
     var v = document.getElementById("local-video");
     if (v) {
-      v.srcObject = stream;
-      v.style.display = "block";
+      v.srcObject = null;
+      v.style.display = "none";
       v.classList.remove("mirror");
-      v.classList.add("screen-fit"); // full screen visible, not cropped
+      v.classList.remove("screen-fit");
+    }
+    var camOff = document.getElementById("cam-off");
+    if (camOff) {
+      camOff.style.display = "flex";
+      camOff.innerHTML = '<div class="icon">🖥️</div><div style="font-weight:700;margin-bottom:6px">Sharing your screen</div><div style="font-size:.85rem;opacity:.8">Viewers see your screen · preview hidden so it stays smooth</div>';
     }
     var vw = document.getElementById("video-wrap");
     if (vw) vw.classList.add("screen-mode");
-    // Tell viewers this is a screen share so they use contain too
+
     try {
       if (fbDb && currentLiveId) fbDb.ref("lives/" + currentLiveId + "/screenShare").set(true);
     } catch(e){}
-    var camOff = document.getElementById("cam-off");
-    if (camOff) camOff.style.display = "none";
+
     replaceOutgoingTracks(stream);
     var btn = document.getElementById("btn-screen");
-    if (btn) btn.style.display = "flex";
-    toast("Sharing screen — viewers see it");
+    if (btn) { btn.style.display = "flex"; btn.classList.add("active-screen"); }
+    toast("Sharing — FPS boosted · don't share this tab");
     var vt = display.getVideoTracks()[0];
-    if (vt) vt.onended = function(){ stopScreenShare(); };
+    if (vt) {
+      try { vt.contentHint = "detail"; } catch(e){}
+      vt.onended = function(){ stopScreenShare(); };
+    }
   } catch(e) {
     var n = e && e.name;
     if (n === "NotAllowedError") toast("Screen share cancelled");
     else if (n === "NotSupportedError" || n === "TypeError")
-      toast("This device blocks screen share — host screen from a computer");
+      toast("This device blocks screen share — use a computer");
     else toast("Could not share screen");
     console.warn(e);
   }
@@ -10014,11 +10067,19 @@ async function startScreenShare(){
 async function stopScreenShare(){
   if (!isScreenSharing) return;
   isScreenSharing = false;
-  try { if (stream) stream.getTracks().forEach(function(tr){ try{tr.stop()}catch(e){} }); } catch(e){}
+  try {
+    if (stream) stream.getVideoTracks().forEach(function(tr){ try{tr.stop()}catch(e){} });
+  } catch(e){}
   var v = document.getElementById("local-video");
   if (v) v.classList.remove("screen-fit");
   var vw = document.getElementById("video-wrap");
   if (vw) vw.classList.remove("screen-mode");
+  var camOff = document.getElementById("cam-off");
+  if (camOff) {
+    camOff.innerHTML = '<div class="icon">📷</div><div>Camera off</div>';
+  }
+  var btn = document.getElementById("btn-screen");
+  if (btn) btn.classList.remove("active-screen");
   try { if (fbDb && currentLiveId) fbDb.ref("lives/" + currentLiveId + "/screenShare").set(false); } catch(e){}
   try { if (typeof startCam === "function") await startCam(); } catch(e){}
   replaceOutgoingTracks(stream);
