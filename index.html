@@ -240,6 +240,7 @@ body.is-admin .more-row.admin-only{display:flex !important}
       <button class="icon-btn" id="btn-mic" title="Mic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4M8 22h8"/></svg></button>
       <button class="icon-btn" id="btn-cam" title="Camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg></button>
       <button class="icon-btn" id="btn-flip" title="Flip camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0115.5-6.4M21 12a9 9 0 01-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg></button>
+      <button class="icon-btn" id="btn-screen" title="Share screen" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
       <button class="icon-btn" id="btn-more" title="More"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg></button>
     </div>
   </div>
@@ -7162,7 +7163,7 @@ document.querySelectorAll(".region-btn").forEach(function(b){
   };
 });
 document.getElementById("btn-go-live").onclick = function(){
-  if (!user) return;
+  if (!user) { toast("Sign in first"); return; }
   syncRegionUI();
   regionModal.classList.add("show");
 };
@@ -7213,6 +7214,10 @@ function subscribeHostBotCount(liveId){
 
 async function startHost(title){
   isHost = true;
+  setTimeout(function(){
+    var b = document.getElementById("btn-screen");
+    if (b) b.style.display = "flex";
+  }, 300);
   liveTitle = title;
   currentLiveId = "live-" + Date.now() + "-" + Math.floor(Math.random()*1e5);
   botCount = 0; realViewers = 0; likeCount = 0; hasLiked = false; chatPhase = "greet";
@@ -9753,7 +9758,7 @@ async function joinRemoteLive(id){
       }
     } catch(e){
       console.warn("viewer answer", e);
-      offerHandled = false;
+      /* offerHandled */;
     }
   });
 
@@ -9777,29 +9782,30 @@ async function joinRemoteLive(id){
 }
 
 function afterLogin(u, displayName){
+  if (!u) return;
   user = {
     name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
     uid: u.uid,
     email: (u.email || "").toLowerCase()
   };
-  document.getElementById("display-name").textContent = user.name;
-  // profile on server
+  window.user = user;
+  var dn = document.getElementById("display-name");
+  if (dn) dn.textContent = user.name;
   if (fbDb) {
-    fbDb.ref("users/" + u.uid).update({
-      name: user.name,
-      email: user.email,
-      lastLogin: Date.now()
-    });
-    fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
-      if (snap.val() === true) setAdmin(true, true);
-      else if (user.email === SPECIAL_EMAIL) {
-        // owner email can unlock with PIN still; not auto-admin without PIN unless already set
-      }
-    });
+    try {
+      fbDb.ref("users/" + u.uid).update({
+        name: user.name,
+        email: user.email,
+        lastLogin: Date.now()
+      }).catch(function(){});
+      fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
+        if (snap.val() === true) setAdmin(true, true);
+      }).catch(function(){});
+    } catch(e){}
   }
   show("menu");
-  wireAdminUnlock();
-  renderLiveList();
+  if (typeof wireAdminUnlock === "function") wireAdminUnlock();
+  if (typeof renderLiveList === "function") renderLiveList();
   toast("Signed in as " + user.name);
 }
 
@@ -9818,12 +9824,30 @@ function requireFirebase(){
     if (!requireFirebase()) return;
     const provider = new firebase.auth.GoogleAuthProvider();
     gbtn.disabled = true;
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    if (mobile) {
+      toast("Opening Google…");
+      fbAuth.signInWithRedirect(provider).catch(function(e){
+        toast(e.message || "Google failed");
+        gbtn.disabled = false;
+      });
+      return;
+    }
     fbAuth.signInWithPopup(provider).then(function(res){
       afterLogin(res.user, res.user.displayName);
     }).catch(function(e){
       toast(e.message || "Google sign in failed");
+      fbAuth.signInWithRedirect(provider).catch(function(e2){
+        toast(e2.message || "Google failed");
+      });
     }).finally(function(){ gbtn.disabled = false; });
   };
+  // Return from Google redirect
+  if (fbAuth) {
+    fbAuth.getRedirectResult().then(function(res){
+      if (res && res.user) afterLogin(res.user, res.user.displayName);
+    }).catch(function(){});
+  }
 
   const btnLogin = document.getElementById("btn-login");
   const btnSignup = document.getElementById("btn-signup");
@@ -9879,6 +9903,68 @@ renderLiveList();
 setInterval(function(){
   if (isHost && currentLiveId) publishLivePresence();
 }, 5000);
+
+
+// --- Screen share (optional, does not affect login) ---
+var isScreenSharing = false;
+function replaceOutgoingTracks(newStream){
+  if (!newStream || !isHost) return;
+  var vTrack = newStream.getVideoTracks()[0];
+  var aTrack = newStream.getAudioTracks()[0];
+  Object.keys(peerConnections || {}).forEach(function(vid){
+    var pc = peerConnections[vid];
+    if (!pc) return;
+    try {
+      pc.getSenders().forEach(function(sender){
+        if (!sender.track) return;
+        if (sender.track.kind === "video" && vTrack) sender.replaceTrack(vTrack).catch(function(){});
+        if (sender.track.kind === "audio" && aTrack) sender.replaceTrack(aTrack).catch(function(){});
+      });
+    } catch(e){}
+  });
+}
+async function startScreenShare(){
+  if (!isHost) { toast("Host only"); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    toast("Screen share not supported here");
+    return;
+  }
+  try {
+    var display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if (!display.getAudioTracks().length && stream) {
+      var mic = stream.getAudioTracks()[0];
+      if (mic) display.addTrack(mic);
+    }
+    isScreenSharing = true;
+    stream = display;
+    var v = document.getElementById("local-video");
+    if (v) { v.srcObject = stream; v.style.display = "block"; v.classList.remove("mirror"); }
+    var camOff = document.getElementById("cam-off");
+    if (camOff) camOff.style.display = "none";
+    replaceOutgoingTracks(stream);
+    var btn = document.getElementById("btn-screen");
+    if (btn) btn.style.display = "flex";
+    toast("Sharing screen");
+    var vt = display.getVideoTracks()[0];
+    if (vt) vt.onended = function(){ stopScreenShare(); };
+  } catch(e) {
+    toast(e && e.name === "NotAllowedError" ? "Cancelled" : "Could not share screen");
+  }
+}
+async function stopScreenShare(){
+  if (!isScreenSharing) return;
+  isScreenSharing = false;
+  try { if (stream) stream.getTracks().forEach(function(tr){ try{tr.stop()}catch(e){} }); } catch(e){}
+  try { if (typeof startCam === "function") await startCam(); } catch(e){}
+  replaceOutgoingTracks(stream);
+  toast("Camera back");
+}
+(function(){
+  var b = document.getElementById("btn-screen");
+  if (b) b.onclick = function(){ if (isScreenSharing) stopScreenShare(); else startScreenShare(); };
+  // show screen btn when host goes live
+  var _sh = typeof startHost === "function" ? startHost : null;
+})();
 
 // Guard admin tools: if not admin, ignore bots/speed/phrase
 (function(){
