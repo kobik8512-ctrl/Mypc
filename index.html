@@ -240,6 +240,7 @@ body.is-admin .more-row.admin-only{display:flex !important}
       <button class="icon-btn" id="btn-mic" title="Mic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4M8 22h8"/></svg></button>
       <button class="icon-btn" id="btn-cam" title="Camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg></button>
       <button class="icon-btn" id="btn-flip" title="Flip camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0115.5-6.4M21 12a9 9 0 01-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg></button>
+      <button class="icon-btn" id="btn-screen" title="Share screen" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
       <button class="icon-btn" id="btn-more" title="More"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg></button>
     </div>
   </div>
@@ -382,7 +383,7 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 8
 };
 let liveTitle = "", currentLiveId = null;
-let stream = null, facingMode = "user", isMuted = false, camOn = true;
+let stream = null, isScreenSharing = false, camStreamBackup = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
 let botAddMode = "instant";
 let joinWaveSpeed = "medium";
@@ -7213,6 +7214,8 @@ function subscribeHostBotCount(liveId){
 
 async function startHost(title){
   isHost = true;
+  isScreenSharing = false;
+  camStreamBackup = null;
   liveTitle = title;
   currentLiveId = "live-" + Date.now() + "-" + Math.floor(Math.random()*1e5);
   botCount = 0; realViewers = 0; likeCount = 0; hasLiked = false; chatPhase = "greet";
@@ -7226,6 +7229,7 @@ async function startHost(title){
   if (rv) { rv.style.display = "none"; rv.srcObject = null; }
   updateCount(); updateLikesUI(); updateCoinsUI();
   show("live-room");
+  if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
   await startCam();
   // Never auto-spawn bots — only when admin presses Add viewers
   stopBots();
@@ -8291,6 +8295,146 @@ document.getElementById("btn-more").onclick = function(e){
   sMenu.classList.remove("show");
 };
 
+async 
+function replaceOutgoingTracks(newStream){
+  if (!newStream || !isHost) return;
+  const vTrack = newStream.getVideoTracks()[0] || null;
+  const aTrack = newStream.getAudioTracks()[0] || null;
+  Object.keys(peerConnections).forEach(function(vid){
+    const pc = peerConnections[vid];
+    if (!pc) return;
+    try {
+      const senders = pc.getSenders();
+      senders.forEach(function(sender){
+        if (!sender.track) return;
+        if (sender.track.kind === "video" && vTrack) {
+          sender.replaceTrack(vTrack).catch(function(){});
+        }
+        if (sender.track.kind === "audio" && aTrack) {
+          sender.replaceTrack(aTrack).catch(function(){});
+        }
+      });
+    } catch(e){}
+  });
+}
+function isIOS(){
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+function isAndroid(){
+  return /Android/i.test(navigator.userAgent || "");
+}
+function isMobileDevice(){
+  return isAndroid() || isIOS() ||
+    (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ""));
+}
+function canScreenShare(){
+  // Desktop: yes. Android Chrome: try if API exists. iOS: almost never.
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) return false;
+  if (isIOS()) return false;
+  return true; // desktop + Android (Chrome may allow)
+}
+async function startScreenShare(){
+  if (!isHost) { toast("Only host can share screen"); return; }
+  if (isIOS()) {
+    toast("iPhone/iPad browsers block screen share — use Android Chrome or a computer");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    toast("This browser cannot share screen — try Chrome on Android or a computer");
+    return;
+  }
+  try {
+    toast(isAndroid() ? "Pick screen or app to share…" : "Pick what to share…");
+    const display = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: 30,
+        // Android Chrome: prefer whole screen when offered
+        displaySurface: "fullscreen"
+      },
+      audio: true
+    });
+    // Keep mic from camera stream if display has no audio
+    let micTrack = null;
+    if (stream) {
+      const auds = stream.getAudioTracks();
+      if (auds[0]) micTrack = auds[0];
+    }
+    if (!display.getAudioTracks().length && micTrack) {
+      display.addTrack(micTrack);
+    } else if (!display.getAudioTracks().length) {
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        if (mic.getAudioTracks()[0]) display.addTrack(mic.getAudioTracks()[0]);
+      } catch(e){}
+    }
+    // Backup camera stream to restore later
+    if (stream && !isScreenSharing) camStreamBackup = stream;
+    isScreenSharing = true;
+    stream = display;
+    const v = document.getElementById("local-video");
+    if (v) {
+      v.srcObject = stream;
+      v.style.display = "block";
+      v.classList.remove("mirror");
+    }
+    const camOff = document.getElementById("cam-off");
+    if (camOff) camOff.style.display = "none";
+    replaceOutgoingTracks(stream);
+    const btn = document.getElementById("btn-screen");
+    if (btn) btn.classList.add("active-screen");
+    toast("Sharing screen — viewers see your screen");
+    // When user stops via browser UI
+    const vt = display.getVideoTracks()[0];
+    if (vt) {
+      vt.onended = function(){ stopScreenShare(); };
+    }
+  } catch(e) {
+    console.warn(e);
+    const name = e && e.name;
+    if (name === "NotAllowedError") toast("Screen share cancelled or blocked");
+    else if (name === "NotSupportedError" || name === "TypeError") {
+      toast(isAndroid()
+        ? "Your Chrome build blocked screen share — update Chrome or use a computer"
+        : "Screen share not supported here");
+    } else {
+      toast(isAndroid()
+        ? "Android could not start share — try latest Chrome, or host from a computer"
+        : "Could not share screen");
+    }
+  }
+}
+async function stopScreenShare(){
+  if (!isScreenSharing) return;
+  isScreenSharing = false;
+  try {
+    if (stream) stream.getTracks().forEach(function(tr){
+      // don't stop mic if shared with backup
+      try { tr.stop(); } catch(e){}
+    });
+  } catch(e){}
+  const btn = document.getElementById("btn-screen");
+  if (btn) btn.classList.remove("active-screen");
+  // Restore camera
+  try {
+    if (typeof startCam === "function") await startCam();
+    else if (camStreamBackup) {
+      stream = camStreamBackup;
+      camStreamBackup = null;
+      const v = document.getElementById("local-video");
+      if (v) { v.srcObject = stream; v.style.display = "block"; }
+    }
+    replaceOutgoingTracks(stream);
+    toast("Back to camera");
+  } catch(e) {
+    toast("Could not restore camera");
+  }
+}
+async function toggleScreenShare(){
+  if (isScreenSharing) await stopScreenShare();
+  else await startScreenShare();
+}
+
 async function flipCamera(){
   facingMode = facingMode === "user" ? "environment" : "user";
   await startCam();
@@ -8315,6 +8459,20 @@ async function flipCamera(){
 }
 const _btnFlip = document.getElementById("btn-flip");
 if (_btnFlip) _btnFlip.onclick = function(){ flipCamera(); };
+const _btnScreen = document.getElementById("btn-screen");
+if (_btnScreen) {
+  _btnScreen.onclick = function(e){ e.stopPropagation(); toggleScreenShare(); };
+}
+function updateScreenBtnVisibility(){
+  const b = document.getElementById("btn-screen");
+  if (!b) return;
+  // Show for host always (mobile gets toast explaining limit)
+  b.style.display = isHost ? "flex" : "none";
+  b.title = isScreenSharing ? "Stop screen share"
+    : (isIOS() ? "Not on iOS" : (isAndroid() ? "Share screen (Android Chrome)" : "Share screen"));
+  b.classList.toggle("active-screen", !!isScreenSharing);
+}
+
 const _moreFlip = document.getElementById("more-flip");
 if (_moreFlip) _moreFlip.onclick = async function(){
   moreMenu.classList.remove("show");
@@ -9578,8 +9736,10 @@ async function joinRemoteLive(id){
   await new Promise(function(r){ setTimeout(r, 350); });
 
   isHost = false;
+  isScreenSharing = false;
   currentLiveId = id;
   liveTitle = L.title || "Live";
+  if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
   liveRegion = L.region || "en";
   botCount = Number(L.bots) || 0;
   if (L.real != null) realViewers = Math.max(0, Number(L.real) || 0);
