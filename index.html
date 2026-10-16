@@ -9937,30 +9937,38 @@ async function joinRemoteLive(id){
 }
 
 function afterLogin(u, displayName){
-  user = {
-    name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
-    uid: u.uid,
-    email: (u.email || "").toLowerCase()
-  };
-  document.getElementById("display-name").textContent = user.name;
-  // profile on server
-  if (fbDb) {
-    fbDb.ref("users/" + u.uid).update({
-      name: user.name,
-      email: user.email,
-      lastLogin: Date.now()
-    });
-    fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
-      if (snap.val() === true) setAdmin(true, true);
-      else if (user.email === SPECIAL_EMAIL) {
-        // owner email can unlock with PIN still; not auto-admin without PIN unless already set
-      }
-    });
+  if (!u) return;
+  try {
+    user = {
+      name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
+      uid: u.uid,
+      email: (u.email || "").toLowerCase()
+    };
+    const dn = document.getElementById("display-name");
+    if (dn) dn.textContent = user.name;
+    // profile on server — never block login if rules fail
+    if (fbDb) {
+      try {
+        fbDb.ref("users/" + u.uid).update({
+          name: user.name,
+          email: user.email,
+          lastLogin: Date.now()
+        }).catch(function(){});
+        fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
+          if (snap.val() === true) setAdmin(true, true);
+        }).catch(function(){});
+      } catch(e){}
+    }
+    show("menu");
+    if (typeof wireAdminUnlock === "function") wireAdminUnlock();
+    if (typeof renderLiveList === "function") renderLiveList();
+    if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
+    toast("Signed in as " + user.name);
+  } catch(err) {
+    console.error("afterLogin", err);
+    toast("Signed in, but UI error — refresh once");
+    try { show("menu"); } catch(e){}
   }
-  show("menu");
-  wireAdminUnlock();
-  renderLiveList();
-  toast("Signed in as " + user.name);
 }
 
 function requireFirebase(){
@@ -9972,16 +9980,58 @@ function requireFirebase(){
 }
 
 (function(){
-  initFirebase();
+  if (!initFirebase()) {
+    console.warn("Firebase not ready at boot");
+  }
+  try {
+    if (fbAuth) fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
+  } catch(e){}
+
+  function authErr(e){
+    if (!e) return "Login failed";
+    const c = e.code || "";
+    const m = e.message || "";
+    if (c === "auth/unauthorized-domain")
+      return "Domain not allowed in Firebase — add github.io in Auth → Settings → Authorized domains";
+    if (c === "auth/operation-not-allowed")
+      return "Email/Google sign-in is disabled in Firebase Console";
+    if (c === "auth/invalid-email") return "Invalid email";
+    if (c === "auth/user-not-found") return "No account with that email — Create account first";
+    if (c === "auth/wrong-password" || c === "auth/invalid-credential") return "Wrong email or password";
+    if (c === "auth/too-many-requests") return "Too many tries — wait a bit";
+    if (c === "auth/network-request-failed") return "Network error — check connection";
+    if (c === "auth/popup-blocked") return "Popup blocked — try again or use email login";
+    if (c === "auth/popup-closed-by-user") return "Sign-in closed";
+    return m || c || "Login failed";
+  }
+
+  // Finish Google redirect (mobile)
+  if (fbAuth) {
+    fbAuth.getRedirectResult().then(function(res){
+      if (res && res.user) afterLogin(res.user, res.user.displayName);
+    }).catch(function(e){ console.warn(e); });
+  }
+
   const gbtn = document.getElementById("btn-google");
   if (gbtn) gbtn.onclick = function(){
     if (!requireFirebase()) return;
     const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
     gbtn.disabled = true;
-    fbAuth.signInWithPopup(provider).then(function(res){
-      afterLogin(res.user, res.user.displayName);
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    const p = mobile
+      ? fbAuth.signInWithRedirect(provider)
+      : fbAuth.signInWithPopup(provider);
+    Promise.resolve(p).then(function(res){
+      if (res && res.user) afterLogin(res.user, res.user.displayName);
+      // redirect has no res here — handled by getRedirectResult after return
     }).catch(function(e){
-      toast(e.message || "Google sign in failed");
+      // popup failed on mobile → try redirect
+      if (!mobile && (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment")) {
+        fbAuth.signInWithRedirect(provider).catch(function(e2){ toast(authErr(e2)); });
+      } else {
+        toast(authErr(e));
+      }
     }).finally(function(){ gbtn.disabled = false; });
   };
 
@@ -9992,9 +10042,10 @@ function requireFirebase(){
     const email = (document.getElementById("auth-email").value || "").trim();
     const pass = document.getElementById("auth-pass").value || "";
     if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
+    btnLogin.disabled = true;
     fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
-      afterLogin(res.user);
-    }).catch(function(e){ toast(e.message || "Sign in failed"); });
+      afterLogin(res.user, res.user.displayName);
+    }).catch(function(e){ toast(authErr(e)); }).finally(function(){ btnLogin.disabled = false; });
   };
   if (btnSignup) btnSignup.onclick = function(){
     if (!requireFirebase()) return;
@@ -10003,20 +10054,31 @@ function requireFirebase(){
     const name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
     if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
     if (name.length < 2) { toast("Pick a display name"); return; }
+    btnSignup.disabled = true;
     fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
       return res.user.updateProfile({ displayName: name }).then(function(){
         afterLogin(res.user, name);
       });
-    }).catch(function(e){ toast(e.message || "Signup failed"); });
+    }).catch(function(e){ toast(authErr(e)); }).finally(function(){ btnSignup.disabled = false; });
   };
 
-  // session restore from Firebase Auth only (not local name)
+  // Enter key submits login
+  ["auth-email","auth-pass"].forEach(function(id){
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("keydown", function(ev){
+      if (ev.key === "Enter" && btnLogin) btnLogin.click();
+    });
+  });
+
+  // session restore
   if (fbAuth) {
     fbAuth.onAuthStateChanged(function(u){
       if (u) afterLogin(u, u.displayName);
     });
   }
 })();
+
 
 // Disable old name-only enter if still present
 (function(){
