@@ -8040,18 +8040,17 @@ function startRemoteBotRelay(){
 
 let joinAnnounceTimer = null;
 function joinSpeedGap(total){
-  // base gap by amount, multiplied by joinWaveSpeed
+  // Gap BETWEEN each single join — never dump many at once
   let gap;
-  if (total <= 10) gap = 450 + Math.random() * 400;
-  else if (total <= 100) gap = 280 + Math.random() * 280;
-  else if (total <= 1000) gap = 180 + Math.random() * 200;
-  else gap = 120 + Math.random() * 140;
+  if (total <= 10) gap = 520 + Math.random() * 380;
+  else if (total <= 100) gap = 380 + Math.random() * 280;
+  else if (total <= 1000) gap = 260 + Math.random() * 200;
+  else gap = 180 + Math.random() * 140;
   const spd = joinWaveSpeed || "medium";
-  const mul = spd === "slow" ? 2.2 : spd === "medium" ? 1.0 : spd === "fast" ? 0.55 : spd === "really" ? 0.3 : 0.15;
-  return Math.max(40, gap * mul);
+  const mul = spd === "slow" ? 2.4 : spd === "medium" ? 1.0 : spd === "fast" ? 0.55 : spd === "really" ? 0.32 : 0.18;
+  return Math.max(90, gap * mul);
 }
 function announceJoins(count, names, opts){
-  // opts.waveCount: if true, botCount rises with each join batch; else count already set
   opts = opts || {};
   const waveCount = !!opts.waveCount;
   const startCount = Math.max(0, Math.floor(Number(opts.startCount) || 0));
@@ -8064,16 +8063,14 @@ function announceJoins(count, names, opts){
     return;
   }
 
-  const maxAnn = total <= 20 ? total : (total <= 100 ? Math.min(total, 40) : (total <= 1000 ? 55 : 80));
+  // Cap how many JOIN LINES we show (count can still go to 1k/1M in wave mode)
+  const maxAnn = total <= 15 ? total : (total <= 100 ? 28 : (total <= 1000 ? 40 : 55));
   let shown = 0;
-  let batchSize = 1;
   let chatsDuring = 0;
   const chatsTarget = 4 + Math.floor(Math.random() * 3);
   window._joinWaveActive = true;
 
-  // For wave count mode: scale how much count increases per announced join
-  const countPerAnn = total > 0 ? (targetCount - startCount) / maxAnn : 0;
-  let countShown = startCount;
+  const countPerAnn = maxAnn > 0 ? (targetCount - startCount) / maxAnn : 0;
 
   function emitJoin(){
     const nm = (names && names[shown]) ? names[shown] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
@@ -8115,9 +8112,8 @@ function announceJoins(count, names, opts){
     }
   }
 
-  function runBatch(){
+  function runOne(){
     if (!currentLiveId || shown >= maxAnn) {
-      // finish at exact target
       if (waveCount) {
         botCount = targetCount;
         publishCount();
@@ -8132,28 +8128,24 @@ function announceJoins(count, names, opts){
       return;
     }
 
-    const remaining = maxAnn - shown;
-    const n = Math.min(batchSize, remaining);
-    for (let k = 0; k < n; k++) {
-      emitJoin();
-      shown++;
-      if (waveCount) {
-        countShown = Math.min(targetCount, startCount + shown * countPerAnn);
-        botCount = Math.floor(countShown);
-      }
+    // ALWAYS 1 join per tick — never 20–30 at once
+    emitJoin();
+    shown++;
+    if (waveCount) {
+      botCount = Math.floor(Math.min(targetCount, startCount + shown * countPerAnn));
+      publishCount();
     }
-    if (waveCount) publishCount();
 
-    if (chatsDuring < chatsTarget && Math.random() < 0.35) {
+    // Occasional side chat during wave (spread out)
+    if (chatsDuring < chatsTarget && Math.random() < 0.22) {
       emitSideChat();
       chatsDuring++;
     }
 
-    batchSize = Math.min(batchSize * 2, total >= 1000 ? 12 : (total >= 100 ? 8 : 4));
-    joinAnnounceTimer = setTimeout(runBatch, joinSpeedGap(total));
+    joinAnnounceTimer = setTimeout(runOne, joinSpeedGap(total));
   }
 
-  joinAnnounceTimer = setTimeout(runBatch, 200 + Math.random() * 300);
+  joinAnnounceTimer = setTimeout(runOne, 250 + Math.random() * 250);
 }
 
 
@@ -8823,14 +8815,16 @@ function flushChatQueue(){
     chatQueue.splice(0, chatQueue.length - (fast ? 24 : 40));
   }
 
-  // Bigger batches at high speed so queue doesn't pile up
+  // Bigger batches at high speed — but NEVER dump many joins in one frame
   let maxBatch = 6;
   if (chatSpeed === "fast") maxBatch = 10;
   if (chatSpeed === "really") maxBatch = 18;
   if (chatSpeed === "ultra") maxBatch = 28;
-  // also scale with backlog
   if (chatQueue.length > 20) maxBatch = Math.max(maxBatch, 20);
   if (chatQueue.length > 50) maxBatch = Math.max(maxBatch, 30);
+  // During join wave or if next items are joins, paint 1–2 max so it looks real
+  const joinHeavy = window._joinWaveActive || (chatQueue[0] && chatQueue[0].join);
+  if (joinHeavy) maxBatch = 1;
 
   const batch = chatQueue.splice(0, Math.min(maxBatch, chatQueue.length));
   const frag = document.createDocumentFragment();
@@ -9201,7 +9195,10 @@ function initFirebase(){
       // drop stale (no heartbeat 90s)
       const now = Date.now();
       Object.keys(onlineLives).forEach(function(id){
-        if (onlineLives[id].hb && now - onlineLives[id].hb > 45000) delete onlineLives[id];
+        const L = onlineLives[id];
+        if (!L) { delete onlineLives[id]; return; }
+        // Drop stale / ghost lives (no heartbeat or old)
+        if (!L.hb || now - L.hb > 25000) delete onlineLives[id];
       });
       renderLiveList();
     });
