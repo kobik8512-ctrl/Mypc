@@ -193,7 +193,8 @@ body.is-admin .more-row.admin-only{display:flex !important}
   <div class="login-box">
     <div class="login-logo">GO <span>LIVE</span></div>
     <div class="login-sub">Sign in with Google or create an account</div>
-    <button class="btn-enter" id="btn-google" style="background:#fff;color:#111;margin-bottom:12px">Continue with Google</button>
+    <button class="btn-enter" id="btn-google" style="background:#fff;color:#111;margin-bottom:8px">Continue with Google</button>
+    <div id="login-status" style="text-align:center;color:#f87171;font-size:.8rem;min-height:1.2em;margin-bottom:8px"></div>
     <div style="text-align:center;color:var(--muted);font-size:.75rem;margin:6px 0">or</div>
     <input type="email" id="auth-email" placeholder="Email" autocomplete="email" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="password" id="auth-pass" placeholder="Password (min 6)" autocomplete="current-password" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
@@ -7117,8 +7118,8 @@ function nextMsg(){
 }
 
 /* ---------- HELPERS ---------- */
-function toast(t,ms){ms=ms||1600;const e=document.getElementById("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),ms)}
-function show(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active")}
+function toast(t,ms){ms=ms||2200;const e=document.getElementById("toast");if(!e){try{console.log("TOAST:",t)}catch(x){}return}e.textContent=t;e.classList.add("show");setTimeout(function(){e.classList.remove("show")},ms)}
+function show(id){document.querySelectorAll(".screen").forEach(function(s){s.classList.remove("active")});var el=document.getElementById(id);if(el)el.classList.add("active");else console.warn("missing screen",id)}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function colorClass(n){let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i))>>>0;return "c"+(h%8)}
 function format(n){n=Number(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1000)return(n/1000).toFixed(1)+"K";return String(Math.floor(n))}
@@ -9979,106 +9980,155 @@ function requireFirebase(){
   return true;
 }
 
-(function(){
-  if (!initFirebase()) {
-    console.warn("Firebase not ready at boot");
+(function setupAuth(){
+  function status(msg, ok){
+    var el = document.getElementById("login-status");
+    if (el) {
+      el.style.color = ok ? "#4ade80" : "#f87171";
+      el.textContent = msg || "";
+    }
+    try { toast(msg); } catch(e){}
+    try { console.log("[auth]", msg); } catch(e){}
   }
-  try {
-    if (fbAuth) fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
-  } catch(e){}
-
   function authErr(e){
     if (!e) return "Login failed";
-    const c = e.code || "";
-    const m = e.message || "";
+    var c = e.code || "";
     if (c === "auth/unauthorized-domain")
-      return "Domain not allowed in Firebase — add github.io in Auth → Settings → Authorized domains";
+      return "Add kobik8512-ctrl.github.io in Firebase Auth → Authorized domains";
     if (c === "auth/operation-not-allowed")
-      return "Email/Google sign-in is disabled in Firebase Console";
-    if (c === "auth/invalid-email") return "Invalid email";
-    if (c === "auth/user-not-found") return "No account with that email — Create account first";
-    if (c === "auth/wrong-password" || c === "auth/invalid-credential") return "Wrong email or password";
-    if (c === "auth/too-many-requests") return "Too many tries — wait a bit";
-    if (c === "auth/network-request-failed") return "Network error — check connection";
-    if (c === "auth/popup-blocked") return "Popup blocked — try again or use email login";
-    if (c === "auth/popup-closed-by-user") return "Sign-in closed";
-    return m || c || "Login failed";
+      return "Enable Google + Email in Firebase Console → Sign-in method";
+    if (c === "auth/popup-blocked" || c === "auth/popup-closed-by-user")
+      return "Popup blocked — trying redirect…";
+    if (c === "auth/invalid-credential" || c === "auth/wrong-password")
+      return "Wrong email or password";
+    if (c === "auth/user-not-found")
+      return "No account — tap Create account";
+    if (c === "auth/network-request-failed")
+      return "Network error";
+    return (e.message || c || "Login failed").slice(0, 120);
   }
 
-  // Finish Google redirect (mobile)
+  // Init Firebase hard
+  var ok = false;
+  try {
+    ok = typeof initFirebase === "function" && initFirebase();
+  } catch(e) {
+    status("Firebase init error: " + (e.message || e));
+  }
+  if (!ok || !fbAuth) {
+    status("Server not ready — check Firebase scripts / config");
+    // still bind so user sees message on click
+  } else {
+    try {
+      fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
+    } catch(e){}
+  }
+
+  // Redirect result (returns from Google on mobile)
   if (fbAuth) {
     fbAuth.getRedirectResult().then(function(res){
-      if (res && res.user) afterLogin(res.user, res.user.displayName);
-    }).catch(function(e){ console.warn(e); });
-  }
-
-  const gbtn = document.getElementById("btn-google");
-  if (gbtn) gbtn.onclick = function(){
-    if (!requireFirebase()) return;
-    const provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    gbtn.disabled = true;
-    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-    const p = mobile
-      ? fbAuth.signInWithRedirect(provider)
-      : fbAuth.signInWithPopup(provider);
-    Promise.resolve(p).then(function(res){
-      if (res && res.user) afterLogin(res.user, res.user.displayName);
-      // redirect has no res here — handled by getRedirectResult after return
-    }).catch(function(e){
-      // popup failed on mobile → try redirect
-      if (!mobile && (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment")) {
-        fbAuth.signInWithRedirect(provider).catch(function(e2){ toast(authErr(e2)); });
-      } else {
-        toast(authErr(e));
+      if (res && res.user) {
+        status("Google OK — entering…", true);
+        afterLogin(res.user, res.user.displayName);
       }
-    }).finally(function(){ gbtn.disabled = false; });
-  };
-
-  const btnLogin = document.getElementById("btn-login");
-  const btnSignup = document.getElementById("btn-signup");
-  if (btnLogin) btnLogin.onclick = function(){
-    if (!requireFirebase()) return;
-    const email = (document.getElementById("auth-email").value || "").trim();
-    const pass = document.getElementById("auth-pass").value || "";
-    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
-    btnLogin.disabled = true;
-    fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
-      afterLogin(res.user, res.user.displayName);
-    }).catch(function(e){ toast(authErr(e)); }).finally(function(){ btnLogin.disabled = false; });
-  };
-  if (btnSignup) btnSignup.onclick = function(){
-    if (!requireFirebase()) return;
-    const email = (document.getElementById("auth-email").value || "").trim();
-    const pass = document.getElementById("auth-pass").value || "";
-    const name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
-    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
-    if (name.length < 2) { toast("Pick a display name"); return; }
-    btnSignup.disabled = true;
-    fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
-      return res.user.updateProfile({ displayName: name }).then(function(){
-        afterLogin(res.user, name);
-      });
-    }).catch(function(e){ toast(authErr(e)); }).finally(function(){ btnSignup.disabled = false; });
-  };
-
-  // Enter key submits login
-  ["auth-email","auth-pass"].forEach(function(id){
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("keydown", function(ev){
-      if (ev.key === "Enter" && btnLogin) btnLogin.click();
+    }).catch(function(e){
+      status(authErr(e));
     });
-  });
-
-  // session restore
-  if (fbAuth) {
     fbAuth.onAuthStateChanged(function(u){
       if (u) afterLogin(u, u.displayName);
     });
   }
-})();
 
+  function doGoogle(){
+    status("Starting Google…");
+    if (!fbAuth) {
+      try { initFirebase(); } catch(e){}
+    }
+    if (!fbAuth) {
+      status("Firebase Auth missing — refresh page");
+      return;
+    }
+    var provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope("email");
+    provider.setCustomParameters({ prompt: "select_account" });
+    var gbtn = document.getElementById("btn-google");
+    if (gbtn) gbtn.disabled = true;
+
+    // Always try popup first; on any fail use redirect (works on mobile)
+    fbAuth.signInWithPopup(provider).then(function(res){
+      if (res && res.user) {
+        status("Signed in!", true);
+        afterLogin(res.user, res.user.displayName);
+      }
+    }).catch(function(e){
+      status(authErr(e) + " — redirecting…");
+      return fbAuth.signInWithRedirect(provider);
+    }).catch(function(e2){
+      status(authErr(e2));
+    }).finally(function(){
+      if (gbtn) gbtn.disabled = false;
+    });
+  }
+
+  function doEmailLogin(){
+    if (!fbAuth && typeof initFirebase === "function") initFirebase();
+    if (!fbAuth) { status("Server not ready"); return; }
+    var email = ((document.getElementById("auth-email") || {}).value || "").trim();
+    var pass = ((document.getElementById("auth-pass") || {}).value || "");
+    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
+    status("Signing in…");
+    fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
+      status("Signed in!", true);
+      afterLogin(res.user, res.user.displayName);
+    }).catch(function(e){ status(authErr(e)); });
+  }
+
+  function doSignup(){
+    if (!fbAuth && typeof initFirebase === "function") initFirebase();
+    if (!fbAuth) { status("Server not ready"); return; }
+    var email = ((document.getElementById("auth-email") || {}).value || "").trim();
+    var pass = ((document.getElementById("auth-pass") || {}).value || "");
+    var name = ((document.getElementById("auth-name") || {}).value || "").trim().slice(0, 24);
+    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
+    if (name.length < 2) { status("Enter display name for signup"); return; }
+    status("Creating account…");
+    fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
+      return res.user.updateProfile({ displayName: name }).then(function(){
+        status("Account created!", true);
+        afterLogin(res.user, name);
+      });
+    }).catch(function(e){ status(authErr(e)); });
+  }
+
+  function bind(){
+    var g = document.getElementById("btn-google");
+    var li = document.getElementById("btn-login");
+    var su = document.getElementById("btn-signup");
+    if (g) {
+      g.onclick = function(ev){
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        doGoogle();
+      };
+    } else {
+      status("Google button missing in HTML");
+    }
+    if (li) li.onclick = function(ev){ if (ev) ev.preventDefault(); doEmailLogin(); };
+    if (su) su.onclick = function(ev){ if (ev) ev.preventDefault(); doSignup(); };
+    ["auth-email","auth-pass"].forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.onkeydown = function(ev){ if (ev.key === "Enter") doEmailLogin(); };
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bind);
+  } else {
+    bind();
+  }
+  // Re-bind after short delay in case something overwrote handlers
+  setTimeout(bind, 500);
+  setTimeout(bind, 1500);
+})();
 
 // Disable old name-only enter if still present
 (function(){
