@@ -177,6 +177,14 @@ input{font-family:inherit}
 body.is-admin .admin-only{display:flex !important}
 .more-row.admin-only{display:none !important}
 body.is-admin .more-row.admin-only{display:flex !important}
+
+#b-menu{min-width:220px;padding:10px}
+.b-sec-label{font-size:.65rem;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.04em;margin:8px 0 4px;padding:0 4px}
+.b-sec-label:first-child{margin-top:0}
+.b-row{display:flex;flex-wrap:wrap;gap:6px}
+.b-row.wrap{flex-wrap:wrap}
+#b-menu .b-opt{flex:1;min-width:52px;text-align:center;font-size:.78rem;padding:8px 6px}
+#b-menu .b-opt.active{outline:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 </style>
 </head>
 <body>
@@ -262,8 +270,29 @@ body.is-admin .more-row.admin-only{display:flex !important}
   <div class="more-row admin-only" id="more-speed">Chat speed</div>
 </div>
 <div id="b-menu">
-  <div class="b-opt" data-amt="1">1</div><div class="b-opt" data-amt="10">10</div><div class="b-opt" data-amt="100">100</div>
-  <div class="b-opt" data-amt="1000">1K</div><div class="b-opt" data-amt="10000">10K</div><div class="b-opt" data-amt="100000">100K</div><div class="b-opt" data-amt="1000000">1M</div>
+  <div class="b-sec-label">Count mode</div>
+  <div class="b-row">
+    <div class="b-opt mode-opt active" data-mode="instant">Instant</div>
+    <div class="b-opt mode-opt" data-mode="wave">Wave</div>
+  </div>
+  <div class="b-sec-label">Join speed</div>
+  <div class="b-row">
+    <div class="b-opt jspd-opt" data-jspd="slow">Slow</div>
+    <div class="b-opt jspd-opt active" data-jspd="medium">Med</div>
+    <div class="b-opt jspd-opt" data-jspd="fast">Fast</div>
+    <div class="b-opt jspd-opt" data-jspd="really">Faster</div>
+    <div class="b-opt jspd-opt" data-jspd="ultra">Ultra</div>
+  </div>
+  <div class="b-sec-label">Add viewers</div>
+  <div class="b-row wrap">
+    <div class="b-opt amt-opt" data-amt="1">1</div>
+    <div class="b-opt amt-opt" data-amt="10">10</div>
+    <div class="b-opt amt-opt" data-amt="100">100</div>
+    <div class="b-opt amt-opt" data-amt="1000">1K</div>
+    <div class="b-opt amt-opt" data-amt="10000">10K</div>
+    <div class="b-opt amt-opt" data-amt="100000">100K</div>
+    <div class="b-opt amt-opt" data-amt="1000000">1M</div>
+  </div>
 </div>
 <div id="s-menu">
   <div class="b-opt" data-spd="slow">Slow</div>
@@ -7799,16 +7828,47 @@ function stopListening(){
 
 /* ---------- B BUTTON ---------- */
 const bMenu = document.getElementById("b-menu");
-function highlightBMenu(){ bMenu.querySelectorAll(".b-opt").forEach(function(o){ o.classList.toggle("active", Number(o.dataset.amt)===botsPerClick); }); }
-bMenu.querySelectorAll(".b-opt").forEach(function(opt){
-  opt.onclick = async function(e){
-    e.stopPropagation();
-    botsPerClick = Number(opt.dataset.amt)||1;
-    highlightBMenu();
-    bMenu.classList.remove("show");
-    await addBotsBatch(botsPerClick);
-  };
-});
+function highlightBMenu(){
+  if (!bMenu) return;
+  bMenu.querySelectorAll(".mode-opt").forEach(function(o){
+    o.classList.toggle("active", o.dataset.mode === botAddMode);
+  });
+  bMenu.querySelectorAll(".jspd-opt").forEach(function(o){
+    o.classList.toggle("active", o.dataset.jspd === joinWaveSpeed);
+  });
+  bMenu.querySelectorAll(".amt-opt").forEach(function(o){
+    o.classList.toggle("active", Number(o.dataset.amt) === botsPerClick);
+  });
+}
+if (bMenu) {
+  bMenu.querySelectorAll(".mode-opt").forEach(function(opt){
+    opt.onclick = function(e){
+      e.stopPropagation();
+      botAddMode = opt.dataset.mode || "instant";
+      try { localStorage.setItem("gl_bot_mode", botAddMode); } catch(err){}
+      highlightBMenu();
+      toast(botAddMode === "instant" ? "Count: Instant" : "Count: Wave (joins add up)");
+    };
+  });
+  bMenu.querySelectorAll(".jspd-opt").forEach(function(opt){
+    opt.onclick = function(e){
+      e.stopPropagation();
+      joinWaveSpeed = opt.dataset.jspd || "medium";
+      try { localStorage.setItem("gl_join_spd", joinWaveSpeed); } catch(err){}
+      highlightBMenu();
+      toast("Join speed: " + joinWaveSpeed);
+    };
+  });
+  bMenu.querySelectorAll(".amt-opt").forEach(function(opt){
+    opt.onclick = async function(e){
+      e.stopPropagation();
+      botsPerClick = Number(opt.dataset.amt) || 1;
+      highlightBMenu();
+      bMenu.classList.remove("show");
+      await addBotsBatch(botsPerClick);
+    };
+  });
+}
 document.addEventListener("click", function(e){ if (bMenu && !bMenu.contains(e.target)) bMenu.classList.remove("show"); });
 
 
@@ -7863,8 +7923,8 @@ function startRemoteBotRelay(){
     const b = Math.max(1, botCount);
     const now = Date.now();
 
-    // Warmup: mostly quiet; 1–2 early lines at ~3–5s, main start 7–30s
-    let warming = (chatFirstMsgAt && now < chatFirstMsgAt);
+    // Join wave or warmup: hold full chat
+    let warming = !!window._joinWaveActive || (chatFirstMsgAt && now < chatFirstMsgAt);
     if (chatWarmUntil && now < chatWarmUntil) {
       if (!window._earlyChirpDone && now >= (chatWarmUntil - 6000 + 3000)) {
         window._earlyChirpDone = true;
@@ -7966,47 +8026,141 @@ function startRemoteBotRelay(){
 
 
 let joinAnnounceTimer = null;
-function announceJoins(count, names){
-  // Cap announcements so 1M bots don't spam forever
-  const maxAnn = 80;
-  const n = Math.min(Math.max(0, Math.floor(count)), maxAnn);
-  if (n <= 0) return;
-  let i = 0;
-  function next(){
-    if (i >= n || !currentLiveId) return;
-    const nm = (names && names[i]) ? names[i] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
-    const phrases = [
-      "joined the live",
-      "just joined",
-      "is here now",
-      "hopped in",
-      "entered the live",
-      "welcome to the party"
-    ];
+function joinSpeedGap(total){
+  // base gap by amount, multiplied by joinWaveSpeed
+  let gap;
+  if (total <= 10) gap = 450 + Math.random() * 400;
+  else if (total <= 100) gap = 280 + Math.random() * 280;
+  else if (total <= 1000) gap = 180 + Math.random() * 200;
+  else gap = 120 + Math.random() * 140;
+  const spd = joinWaveSpeed || "medium";
+  const mul = spd === "slow" ? 2.2 : spd === "medium" ? 1.0 : spd === "fast" ? 0.55 : spd === "really" ? 0.3 : 0.15;
+  return Math.max(40, gap * mul);
+}
+function announceJoins(count, names, opts){
+  // opts.waveCount: if true, botCount rises with each join batch; else count already set
+  opts = opts || {};
+  const waveCount = !!opts.waveCount;
+  const startCount = Math.max(0, Math.floor(Number(opts.startCount) || 0));
+  const targetCount = Math.max(startCount, Math.floor(Number(opts.targetCount) || (startCount + count)));
+
+  clearTimeout(joinAnnounceTimer);
+  const total = Math.max(0, Math.floor(count));
+  if (total <= 0) {
+    window._joinWaveActive = false;
+    return;
+  }
+
+  const maxAnn = total <= 20 ? total : (total <= 100 ? Math.min(total, 40) : (total <= 1000 ? 55 : 80));
+  let shown = 0;
+  let batchSize = 1;
+  let chatsDuring = 0;
+  const chatsTarget = 4 + Math.floor(Math.random() * 3);
+  window._joinWaveActive = true;
+
+  // For wave count mode: scale how much count increases per announced join
+  const countPerAnn = total > 0 ? (targetCount - startCount) / maxAnn : 0;
+  let countShown = startCount;
+
+  function emitJoin(){
+    const nm = (names && names[shown]) ? names[shown] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
+    const phrases = ["joined the live","just joined","is here now","hopped in","entered the live","welcome to the party"];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
     if (isHost) {
       addMsg(nm, text, false, false, { join: true });
-    } else if (fbReady && fbDb) {
+    } else if (fbReady && fbDb && currentLiveId) {
       try {
         fbDb.ref("liveChat/" + currentLiveId).push({
           name: nm, text: text, t: Date.now(), gift: false, me: false, uid: null, bot: true, join: true
         });
       } catch(e){}
     }
-    i++;
-    // Stagger: ~120–400ms, a bit faster if many
-    const gap = n > 40 ? (80 + Math.random()*120) : (120 + Math.random()*280);
-    joinAnnounceTimer = setTimeout(next, gap);
   }
-  clearTimeout(joinAnnounceTimer);
-  next();
+  function emitSideChat(){
+    const nm = (typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*99));
+    const text = (typeof nextMsg === "function") ? nextMsg() : "hi";
+    if (isHost) addMsg(nm, text, false);
+    else if (fbReady && fbDb && currentLiveId) {
+      try {
+        fbDb.ref("liveChat/" + currentLiveId).push({
+          name: nm, text: String(text).slice(0, 200), t: Date.now(), gift: false, me: false, uid: null, bot: true
+        });
+      } catch(e){}
+    }
+  }
+  function publishCount(){
+    updateCount();
+    if (typeof publishLivePresence === "function" && isHost) publishLivePresence();
+    else if (fbReady && fbDb && currentLiveId) {
+      try {
+        fbDb.ref("lives/" + currentLiveId).update({
+          bots: botCount,
+          viewers: Math.max(1, botCount + (realViewers || 1)),
+          hb: Date.now()
+        });
+      } catch(e){}
+    }
+  }
+
+  function runBatch(){
+    if (!currentLiveId || shown >= maxAnn) {
+      // finish at exact target
+      if (waveCount) {
+        botCount = targetCount;
+        publishCount();
+      }
+      window._joinWaveActive = false;
+      const now = Date.now();
+      chatFirstMsgAt = now + 1200 + Math.random() * 1800;
+      chatRampStart = chatFirstMsgAt;
+      chatPhase = "warming";
+      chatWarmUntil = 0;
+      window._earlyChirpDone = true;
+      return;
+    }
+
+    const remaining = maxAnn - shown;
+    const n = Math.min(batchSize, remaining);
+    for (let k = 0; k < n; k++) {
+      emitJoin();
+      shown++;
+      if (waveCount) {
+        countShown = Math.min(targetCount, startCount + shown * countPerAnn);
+        botCount = Math.floor(countShown);
+      }
+    }
+    if (waveCount) publishCount();
+
+    if (chatsDuring < chatsTarget && Math.random() < 0.35) {
+      emitSideChat();
+      chatsDuring++;
+    }
+
+    batchSize = Math.min(batchSize * 2, total >= 1000 ? 12 : (total >= 100 ? 8 : 4));
+    joinAnnounceTimer = setTimeout(runBatch, joinSpeedGap(total));
+  }
+
+  joinAnnounceTimer = setTimeout(runBatch, 200 + Math.random() * 300);
 }
+
 
 async function addBotsBatch(n){
   if (!isAdmin) { toast("Admin only"); return; }
   n = Math.floor(Number(n)) || 1;
-  botCount = Math.max(0, (botCount || 0) + n);
-  updateCount();
+  const mode = botAddMode || "instant";
+  const startCount = Math.max(0, botCount || 0);
+  const targetCount = startCount + n;
+
+  if (mode === "instant") {
+    // Count jumps immediately
+    botCount = targetCount;
+    updateCount();
+  } else {
+    // Wave: count starts where it is; rises during join wave
+    botCount = startCount;
+    updateCount();
+  }
+
   if (isHost) {
     if (!chatTimer) {
       startBots();
@@ -8016,11 +8170,13 @@ async function addBotsBatch(n){
       clearTimeout(scTimer); scTimer = null;
       scheduleSuperChat(true);
     }
-    // Staggered join lines (capped so 1M doesn't spam forever)
-    announceJoins(n);
-    if (typeof publishLivePresence === "function") publishLivePresence();
-    // also write bots so presence is correct
-    if (fbReady && fbDb && currentLiveId) {
+    announceJoins(n, null, {
+      waveCount: mode === "wave",
+      startCount: startCount,
+      targetCount: targetCount
+    });
+    if (mode === "instant" && typeof publishLivePresence === "function") publishLivePresence();
+    if (fbReady && fbDb && currentLiveId && mode === "instant") {
       try {
         await fbDb.ref("lives/" + currentLiveId).update({
           bots: botCount,
@@ -8031,21 +8187,27 @@ async function addBotsBatch(n){
       } catch(e){}
     }
   } else if (fbReady && fbDb && currentLiveId) {
-    try {
-      await fbDb.ref("lives/" + currentLiveId).update({
-        bots: botCount,
-        viewers: Math.max(1, botCount + (realViewers || 1)),
-        real: realViewers || 1,
-        chatSpeed: chatSpeed,
-        hb: Date.now()
-      });
-    } catch(e){}
-    // Host will startBots via subscribeHostBotCount — relay only while admin stays
+    if (mode === "instant") {
+      try {
+        await fbDb.ref("lives/" + currentLiveId).update({
+          bots: botCount,
+          viewers: Math.max(1, botCount + (realViewers || 1)),
+          real: realViewers || 1,
+          chatSpeed: chatSpeed,
+          hb: Date.now()
+        });
+      } catch(e){}
+    }
     startRemoteBotRelay();
-    announceJoins(n);
+    announceJoins(n, null, {
+      waveCount: mode === "wave",
+      startCount: startCount,
+      targetCount: targetCount
+    });
   }
-  toast("+" + format(n) + " viewers");
+  toast((mode === "instant" ? "Instant +" : "Wave +") + format(n) + " · join " + (joinWaveSpeed || "medium"));
 }
+
 
 
 /* ---------- CHAT SPEED ---------- */
@@ -8479,20 +8641,24 @@ function scheduleChat(){
     return;
   }
   const now = Date.now();
-  // --- Early drip: ~3–5s allow 1–2 messages so it's not dead silent ---
+  // --- Join wave in progress: only joins + 4–6 side chats (from announceJoins) ---
+  if (window._joinWaveActive) {
+    chatTimer = setTimeout(scheduleChat, 400);
+    return;
+  }
+  // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
   if (chatWarmUntil && now < chatWarmUntil) {
-    // schedule one early chirp once in the 3–5s window
     if (!window._earlyChirpDone && now >= (chatWarmUntil - 6000 + 3000)) {
       window._earlyChirpDone = true;
-      const n = 1 + (Math.random() < 0.55 ? 1 : 0); // 1 or 2
+      const n = 1 + (Math.random() < 0.55 ? 1 : 0);
       for (let i = 0; i < n; i++) addMsg(nextName(), nextMsg());
     }
     chatTimer = setTimeout(scheduleChat, Math.min(400, chatWarmUntil - now + 50));
     return;
   }
-  // --- WAIT for main first-message window (7–30s) ---
+  // --- WAIT for message-wave start ---
   if (chatFirstMsgAt && now < chatFirstMsgAt) {
-    chatTimer = setTimeout(scheduleChat, Math.min(800, chatFirstMsgAt - now + 50));
+    chatTimer = setTimeout(scheduleChat, Math.min(500, chatFirstMsgAt - now + 50));
     return;
   }
 
@@ -8512,31 +8678,34 @@ function scheduleChat(){
   let rampMul = 1;
   let multi = 1;
   if (chatRampStart && chatPhase !== "normal") {
-    let rampLen = 18000;
-    if (botCount >= 1000) rampLen = 14000;
-    if (botCount >= 100000) rampLen = 10000;
-    if (botCount >= 1000000) rampLen = 8000;
-    if (botCount < 20) rampLen = 22000;
+    let rampLen = 14000; // steady build after join wave
+    if (botCount >= 1000) rampLen = 12000;
+    if (botCount >= 100000) rampLen = 9000;
+    if (botCount >= 1000000) rampLen = 7000;
+    if (botCount < 20) rampLen = 16000;
     const elapsed = Math.max(0, now - chatRampStart);
-    const p = Math.min(1, elapsed / rampLen); // 0 → 1
-    // ease-in: slow start, then accelerate
+    const p = Math.min(1, elapsed / rampLen);
     const ease = p * p;
     // early: very sparse (one message, long gaps)
-    if (p < 0.15) {
-      rampMul = 8 + Math.random() * 6;  // first drips
+    // Message wave after joins: 1 → 2–4 → ~6 → explode (steady, not instant)
+    if (p < 0.12) {
+      rampMul = 5 + Math.random() * 3;
       multi = 1;
-    } else if (p < 0.35) {
-      rampMul = 4 + Math.random() * 3;
-      multi = 1;
-    } else if (p < 0.55) {
-      rampMul = 2.2 + Math.random() * 1.5;
-      multi = 1 + (Math.random() < 0.4 ? 1 : 0);
-    } else if (p < 0.75) {
-      rampMul = 1.4 + Math.random() * 0.6;
-      multi = 1 + Math.floor(Math.random() * 2);
+    } else if (p < 0.28) {
+      rampMul = 3 + Math.random() * 1.5;
+      multi = 1 + (Math.random() < 0.5 ? 1 : 0);
+    } else if (p < 0.45) {
+      rampMul = 2 + Math.random() * 0.8;
+      multi = 2 + Math.floor(Math.random() * 2); // ~2–3
+    } else if (p < 0.62) {
+      rampMul = 1.5 + Math.random() * 0.4;
+      multi = 3 + Math.floor(Math.random() * 3); // ~3–5 toward 6
+    } else if (p < 0.8) {
+      rampMul = 1.15 + Math.random() * 0.25;
+      multi = 4 + Math.floor(Math.random() * 3); // building
     } else {
-      rampMul = 1 + (1 - ease) * 0.5;
-      multi = 1 + Math.floor(Math.random() * 2);
+      rampMul = 1 + (1 - ease) * 0.35;
+      multi = 2 + Math.floor(Math.random() * 3);
     }
     if (p >= 1) chatPhase = "normal";
   } else {
