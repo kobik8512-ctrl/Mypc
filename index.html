@@ -355,6 +355,12 @@ const SPEECH_LANG = "en-US";
 const CONTEXT_RATE = 0.75;
 
 let user = null, isHost = false, isAdmin = false, adminClicks = 0;
+function syncUser(){
+  if (!user && window.user && window.user.uid) user = window.user;
+  if (user && !window.user) window.user = user;
+  return user;
+}
+setInterval(syncUser, 400);
 let onlineLives = {}; // id -> live meta
 let fbReady = false, fbAuth = null, fbDb = null;
 let peerConnections = {};
@@ -7164,7 +7170,12 @@ document.querySelectorAll(".region-btn").forEach(function(b){
   };
 });
 document.getElementById("btn-go-live").onclick = function(){
-  if (!user) return;
+  syncUser();
+  if (!user) {
+    toast("Sign in first");
+    try { show("login-screen"); } catch(e){}
+    return;
+  }
   syncRegionUI();
   regionModal.classList.add("show");
 };
@@ -7178,6 +7189,8 @@ document.getElementById("region-next").onclick = function(){
 };
 document.getElementById("btn-cancel").onclick = function(){ titleModal.classList.remove("show"); };
 document.getElementById("btn-start").onclick = async function(){
+  if (typeof syncUser === "function") syncUser();
+  if (!user) { toast("Sign in first"); return; }
   const title = (document.getElementById("title-input").value || "").trim() || (user.name + (liveRegion==="ge" ? " — ლაივი" : "'s live"));
   titleModal.classList.remove("show");
   await startHost(title);
@@ -7214,6 +7227,8 @@ function subscribeHostBotCount(liveId){
 }
 
 async function startHost(title){
+  if (typeof syncUser === "function") syncUser();
+  if (!user) { toast("Sign in first"); show("login-screen"); return; }
   isHost = true;
   isScreenSharing = false;
   camStreamBackup = null;
@@ -8467,10 +8482,16 @@ if (_btnScreen) {
 function updateScreenBtnVisibility(){
   const b = document.getElementById("btn-screen");
   if (!b) return;
-  // Show for host always (mobile gets toast explaining limit)
-  b.style.display = isHost ? "flex" : "none";
-  b.title = isScreenSharing ? "Stop screen share"
-    : (isIOS() ? "Not on iOS" : (isAndroid() ? "Share screen (Android Chrome)" : "Share screen"));
+  if (isHost) {
+    b.style.display = "flex";
+    b.style.visibility = "visible";
+    b.style.opacity = "1";
+  } else {
+    b.style.display = "none";
+  }
+  b.title = isScreenSharing ? "Stop sharing screen"
+    : (typeof isIOS === "function" && isIOS() ? "Screen share not on iOS"
+    : "Share screen");
   b.classList.toggle("active-screen", !!isScreenSharing);
 }
 
@@ -9945,6 +9966,7 @@ function afterLogin(u, displayName){
       uid: u.uid,
       email: (u.email || "").toLowerCase()
     };
+    window.user = user;
     const dn = document.getElementById("display-name");
     if (dn) dn.textContent = user.name;
     // profile on server — never block login if rules fail
@@ -10165,17 +10187,19 @@ setInterval(function(){
         uid: u.uid,
         email: (u.email || "").toLowerCase()
       };
+      // Main app reads window.user via syncUser()
       var dn = document.getElementById("display-name");
       if (dn) dn.textContent = window.user.name;
       document.querySelectorAll(".screen").forEach(function(s){ s.classList.remove("active"); });
       var menu = document.getElementById("menu");
       if (menu) menu.classList.add("active");
       status("Signed in as " + window.user.name, true);
-      // sync with main app if loaded
       try {
         if (typeof afterLogin === "function") afterLogin(u, window.user.name);
-        else if (typeof user !== "undefined") user = window.user;
-      } catch(e){}
+        if (typeof syncUser === "function") syncUser();
+        if (typeof renderLiveList === "function") renderLiveList();
+        if (typeof wireAdminUnlock === "function") wireAdminUnlock();
+      } catch(e){ console.warn(e); }
     } catch(e){
       status("Login UI error: " + e.message);
       alert("Logged in but could not open menu: " + e.message);
