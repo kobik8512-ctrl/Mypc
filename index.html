@@ -193,14 +193,13 @@ body.is-admin .more-row.admin-only{display:flex !important}
   <div class="login-box">
     <div class="login-logo">GO <span>LIVE</span></div>
     <div class="login-sub">Sign in with Google or create an account</div>
-    <button class="btn-enter" id="btn-google" type="button" style="background:#fff;color:#111;margin-bottom:8px" onclick="try{window.__goLiveGoogle&&window.__goLiveGoogle()}catch(e){alert(e)}">Continue with Google</button>
-    <div id="login-status" style="text-align:center;color:#f87171;font-size:.8rem;min-height:1.2em;margin-bottom:8px"></div>
+    <button class="btn-enter" id="btn-google" style="background:#fff;color:#111;margin-bottom:12px">Continue with Google</button>
     <div style="text-align:center;color:var(--muted);font-size:.75rem;margin:6px 0">or</div>
     <input type="email" id="auth-email" placeholder="Email" autocomplete="email" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="password" id="auth-pass" placeholder="Password (min 6)" autocomplete="current-password" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="text" id="auth-name" placeholder="Display name (signup only)" maxlength="24" autocomplete="nickname" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
-    <button class="btn-enter" id="btn-login" type="button" onclick="try{window.__goLiveLogin&&window.__goLiveLogin()}catch(e){alert(e)}">Sign in</button>
-    <button class="btn-enter" id="btn-signup" type="button" onclick="try{window.__goLiveSignup&&window.__goLiveSignup()}catch(e){alert(e)}" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:#fff">Create account</button>
+    <button class="btn-enter" id="btn-login">Sign in</button>
+    <button class="btn-enter" id="btn-signup" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:#fff">Create account</button>
     <div class="login-note">Accounts are stored on the server. Display name alone cannot open someone else's account.</div>
   </div>
 </div>
@@ -241,7 +240,6 @@ body.is-admin .more-row.admin-only{display:flex !important}
       <button class="icon-btn" id="btn-mic" title="Mic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4M8 22h8"/></svg></button>
       <button class="icon-btn" id="btn-cam" title="Camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg></button>
       <button class="icon-btn" id="btn-flip" title="Flip camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0115.5-6.4M21 12a9 9 0 01-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg></button>
-      <button class="icon-btn" id="btn-screen" title="Share screen" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
       <button class="icon-btn" id="btn-more" title="More"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg></button>
     </div>
   </div>
@@ -355,12 +353,6 @@ const SPEECH_LANG = "en-US";
 const CONTEXT_RATE = 0.75;
 
 let user = null, isHost = false, isAdmin = false, adminClicks = 0;
-function syncUser(){
-  if (!user && window.user && window.user.uid) user = window.user;
-  if (user && !window.user) window.user = user;
-  return user;
-}
-setInterval(syncUser, 400);
 let onlineLives = {}; // id -> live meta
 let fbReady = false, fbAuth = null, fbDb = null;
 let peerConnections = {};
@@ -390,7 +382,7 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 8
 };
 let liveTitle = "", currentLiveId = null;
-let stream = null, isScreenSharing = false, camStreamBackup = null, facingMode = "user", isMuted = false, camOn = true;
+let stream = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
 let botAddMode = "instant";
 let joinWaveSpeed = "medium";
@@ -7124,8 +7116,8 @@ function nextMsg(){
 }
 
 /* ---------- HELPERS ---------- */
-function toast(t,ms){ms=ms||2200;const e=document.getElementById("toast");if(!e){try{console.log("TOAST:",t)}catch(x){}return}e.textContent=t;e.classList.add("show");setTimeout(function(){e.classList.remove("show")},ms)}
-function show(id){document.querySelectorAll(".screen").forEach(function(s){s.classList.remove("active")});var el=document.getElementById(id);if(el)el.classList.add("active");else console.warn("missing screen",id)}
+function toast(t,ms){ms=ms||1600;const e=document.getElementById("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),ms)}
+function show(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active")}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function colorClass(n){let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i))>>>0;return "c"+(h%8)}
 function format(n){n=Number(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1000)return(n/1000).toFixed(1)+"K";return String(Math.floor(n))}
@@ -7170,12 +7162,7 @@ document.querySelectorAll(".region-btn").forEach(function(b){
   };
 });
 document.getElementById("btn-go-live").onclick = function(){
-  syncUser();
-  if (!user) {
-    toast("Sign in first");
-    try { show("login-screen"); } catch(e){}
-    return;
-  }
+  if (!user) return;
   syncRegionUI();
   regionModal.classList.add("show");
 };
@@ -7189,8 +7176,6 @@ document.getElementById("region-next").onclick = function(){
 };
 document.getElementById("btn-cancel").onclick = function(){ titleModal.classList.remove("show"); };
 document.getElementById("btn-start").onclick = async function(){
-  if (typeof syncUser === "function") syncUser();
-  if (!user) { toast("Sign in first"); return; }
   const title = (document.getElementById("title-input").value || "").trim() || (user.name + (liveRegion==="ge" ? " — ლაივი" : "'s live"));
   titleModal.classList.remove("show");
   await startHost(title);
@@ -7227,11 +7212,7 @@ function subscribeHostBotCount(liveId){
 }
 
 async function startHost(title){
-  if (typeof syncUser === "function") syncUser();
-  if (!user) { toast("Sign in first"); show("login-screen"); return; }
   isHost = true;
-  isScreenSharing = false;
-  camStreamBackup = null;
   liveTitle = title;
   currentLiveId = "live-" + Date.now() + "-" + Math.floor(Math.random()*1e5);
   botCount = 0; realViewers = 0; likeCount = 0; hasLiked = false; chatPhase = "greet";
@@ -7245,7 +7226,6 @@ async function startHost(title){
   if (rv) { rv.style.display = "none"; rv.srcObject = null; }
   updateCount(); updateLikesUI(); updateCoinsUI();
   show("live-room");
-  if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
   await startCam();
   // Never auto-spawn bots — only when admin presses Add viewers
   stopBots();
@@ -8311,146 +8291,6 @@ document.getElementById("btn-more").onclick = function(e){
   sMenu.classList.remove("show");
 };
 
-async 
-function replaceOutgoingTracks(newStream){
-  if (!newStream || !isHost) return;
-  const vTrack = newStream.getVideoTracks()[0] || null;
-  const aTrack = newStream.getAudioTracks()[0] || null;
-  Object.keys(peerConnections).forEach(function(vid){
-    const pc = peerConnections[vid];
-    if (!pc) return;
-    try {
-      const senders = pc.getSenders();
-      senders.forEach(function(sender){
-        if (!sender.track) return;
-        if (sender.track.kind === "video" && vTrack) {
-          sender.replaceTrack(vTrack).catch(function(){});
-        }
-        if (sender.track.kind === "audio" && aTrack) {
-          sender.replaceTrack(aTrack).catch(function(){});
-        }
-      });
-    } catch(e){}
-  });
-}
-function isIOS(){
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-function isAndroid(){
-  return /Android/i.test(navigator.userAgent || "");
-}
-function isMobileDevice(){
-  return isAndroid() || isIOS() ||
-    (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ""));
-}
-function canScreenShare(){
-  // Desktop: yes. Android Chrome: try if API exists. iOS: almost never.
-  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) return false;
-  if (isIOS()) return false;
-  return true; // desktop + Android (Chrome may allow)
-}
-async function startScreenShare(){
-  if (!isHost) { toast("Only host can share screen"); return; }
-  if (isIOS()) {
-    toast("iPhone/iPad browsers block screen share — use Android Chrome or a computer");
-    return;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    toast("This browser cannot share screen — try Chrome on Android or a computer");
-    return;
-  }
-  try {
-    toast(isAndroid() ? "Pick screen or app to share…" : "Pick what to share…");
-    const display = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        frameRate: 30,
-        // Android Chrome: prefer whole screen when offered
-        displaySurface: "fullscreen"
-      },
-      audio: true
-    });
-    // Keep mic from camera stream if display has no audio
-    let micTrack = null;
-    if (stream) {
-      const auds = stream.getAudioTracks();
-      if (auds[0]) micTrack = auds[0];
-    }
-    if (!display.getAudioTracks().length && micTrack) {
-      display.addTrack(micTrack);
-    } else if (!display.getAudioTracks().length) {
-      try {
-        const mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        if (mic.getAudioTracks()[0]) display.addTrack(mic.getAudioTracks()[0]);
-      } catch(e){}
-    }
-    // Backup camera stream to restore later
-    if (stream && !isScreenSharing) camStreamBackup = stream;
-    isScreenSharing = true;
-    stream = display;
-    const v = document.getElementById("local-video");
-    if (v) {
-      v.srcObject = stream;
-      v.style.display = "block";
-      v.classList.remove("mirror");
-    }
-    const camOff = document.getElementById("cam-off");
-    if (camOff) camOff.style.display = "none";
-    replaceOutgoingTracks(stream);
-    const btn = document.getElementById("btn-screen");
-    if (btn) btn.classList.add("active-screen");
-    toast("Sharing screen — viewers see your screen");
-    // When user stops via browser UI
-    const vt = display.getVideoTracks()[0];
-    if (vt) {
-      vt.onended = function(){ stopScreenShare(); };
-    }
-  } catch(e) {
-    console.warn(e);
-    const name = e && e.name;
-    if (name === "NotAllowedError") toast("Screen share cancelled or blocked");
-    else if (name === "NotSupportedError" || name === "TypeError") {
-      toast(isAndroid()
-        ? "Your Chrome build blocked screen share — update Chrome or use a computer"
-        : "Screen share not supported here");
-    } else {
-      toast(isAndroid()
-        ? "Android could not start share — try latest Chrome, or host from a computer"
-        : "Could not share screen");
-    }
-  }
-}
-async function stopScreenShare(){
-  if (!isScreenSharing) return;
-  isScreenSharing = false;
-  try {
-    if (stream) stream.getTracks().forEach(function(tr){
-      // don't stop mic if shared with backup
-      try { tr.stop(); } catch(e){}
-    });
-  } catch(e){}
-  const btn = document.getElementById("btn-screen");
-  if (btn) btn.classList.remove("active-screen");
-  // Restore camera
-  try {
-    if (typeof startCam === "function") await startCam();
-    else if (camStreamBackup) {
-      stream = camStreamBackup;
-      camStreamBackup = null;
-      const v = document.getElementById("local-video");
-      if (v) { v.srcObject = stream; v.style.display = "block"; }
-    }
-    replaceOutgoingTracks(stream);
-    toast("Back to camera");
-  } catch(e) {
-    toast("Could not restore camera");
-  }
-}
-async function toggleScreenShare(){
-  if (isScreenSharing) await stopScreenShare();
-  else await startScreenShare();
-}
-
 async function flipCamera(){
   facingMode = facingMode === "user" ? "environment" : "user";
   await startCam();
@@ -8475,26 +8315,6 @@ async function flipCamera(){
 }
 const _btnFlip = document.getElementById("btn-flip");
 if (_btnFlip) _btnFlip.onclick = function(){ flipCamera(); };
-const _btnScreen = document.getElementById("btn-screen");
-if (_btnScreen) {
-  _btnScreen.onclick = function(e){ e.stopPropagation(); toggleScreenShare(); };
-}
-function updateScreenBtnVisibility(){
-  const b = document.getElementById("btn-screen");
-  if (!b) return;
-  if (isHost) {
-    b.style.display = "flex";
-    b.style.visibility = "visible";
-    b.style.opacity = "1";
-  } else {
-    b.style.display = "none";
-  }
-  b.title = isScreenSharing ? "Stop sharing screen"
-    : (typeof isIOS === "function" && isIOS() ? "Screen share not on iOS"
-    : "Share screen");
-  b.classList.toggle("active-screen", !!isScreenSharing);
-}
-
 const _moreFlip = document.getElementById("more-flip");
 if (_moreFlip) _moreFlip.onclick = async function(){
   moreMenu.classList.remove("show");
@@ -9758,10 +9578,8 @@ async function joinRemoteLive(id){
   await new Promise(function(r){ setTimeout(r, 350); });
 
   isHost = false;
-  isScreenSharing = false;
   currentLiveId = id;
   liveTitle = L.title || "Live";
-  if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
   liveRegion = L.region || "en";
   botCount = Number(L.bots) || 0;
   if (L.real != null) realViewers = Math.max(0, Number(L.real) || 0);
@@ -9935,7 +9753,7 @@ async function joinRemoteLive(id){
       }
     } catch(e){
       console.warn("viewer answer", e);
-      /* offerHandled */;
+      offerHandled = false;
     }
   });
 
@@ -9959,39 +9777,30 @@ async function joinRemoteLive(id){
 }
 
 function afterLogin(u, displayName){
-  if (!u) return;
-  try {
-    user = {
-      name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
-      uid: u.uid,
-      email: (u.email || "").toLowerCase()
-    };
-    window.user = user;
-    const dn = document.getElementById("display-name");
-    if (dn) dn.textContent = user.name;
-    // profile on server — never block login if rules fail
-    if (fbDb) {
-      try {
-        fbDb.ref("users/" + u.uid).update({
-          name: user.name,
-          email: user.email,
-          lastLogin: Date.now()
-        }).catch(function(){});
-        fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
-          if (snap.val() === true) setAdmin(true, true);
-        }).catch(function(){});
-      } catch(e){}
-    }
-    show("menu");
-    if (typeof wireAdminUnlock === "function") wireAdminUnlock();
-    if (typeof renderLiveList === "function") renderLiveList();
-    if (typeof updateScreenBtnVisibility === "function") updateScreenBtnVisibility();
-    toast("Signed in as " + user.name);
-  } catch(err) {
-    console.error("afterLogin", err);
-    toast("Signed in, but UI error — refresh once");
-    try { show("menu"); } catch(e){}
+  user = {
+    name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
+    uid: u.uid,
+    email: (u.email || "").toLowerCase()
+  };
+  document.getElementById("display-name").textContent = user.name;
+  // profile on server
+  if (fbDb) {
+    fbDb.ref("users/" + u.uid).update({
+      name: user.name,
+      email: user.email,
+      lastLogin: Date.now()
+    });
+    fbDb.ref("users/" + u.uid + "/admin").once("value").then(function(snap){
+      if (snap.val() === true) setAdmin(true, true);
+      else if (user.email === SPECIAL_EMAIL) {
+        // owner email can unlock with PIN still; not auto-admin without PIN unless already set
+      }
+    });
   }
+  show("menu");
+  wireAdminUnlock();
+  renderLiveList();
+  toast("Signed in as " + user.name);
 }
 
 function requireFirebase(){
@@ -10002,103 +9811,51 @@ function requireFirebase(){
   return true;
 }
 
-(function setupAuth(){
-  function status(msg, ok){
-    var el = document.getElementById("login-status");
-    if (el) { el.style.color = ok ? "#4ade80" : "#f87171"; el.textContent = msg || ""; }
-    try { toast(msg); } catch(e){}
-    try { console.log("[auth]", msg); } catch(e){}
-  }
-  function authErr(e){
-    if (!e) return "Login failed";
-    var c = e.code || "";
-    if (c === "auth/unauthorized-domain")
-      return "Firebase: add kobik8512-ctrl.github.io under Auth → Authorized domains";
-    if (c === "auth/operation-not-allowed")
-      return "Enable Google + Email/Password in Firebase Sign-in method";
-    if (c === "auth/popup-blocked" || c === "auth/popup-closed-by-user")
-      return "Popup blocked — using redirect…";
-    if (c === "auth/invalid-credential" || c === "auth/wrong-password") return "Wrong email or password";
-    if (c === "auth/user-not-found") return "No account — Create account first";
-    if (c === "auth/network-request-failed") return "Network error";
-    return String(e.message || c || "Login failed").slice(0, 140);
-  }
+(function(){
+  initFirebase();
+  const gbtn = document.getElementById("btn-google");
+  if (gbtn) gbtn.onclick = function(){
+    if (!requireFirebase()) return;
+    const provider = new firebase.auth.GoogleAuthProvider();
+    gbtn.disabled = true;
+    fbAuth.signInWithPopup(provider).then(function(res){
+      afterLogin(res.user, res.user.displayName);
+    }).catch(function(e){
+      toast(e.message || "Google sign in failed");
+    }).finally(function(){ gbtn.disabled = false; });
+  };
 
-  try { if (typeof initFirebase === "function") initFirebase(); } catch(e){ status("Init error"); }
+  const btnLogin = document.getElementById("btn-login");
+  const btnSignup = document.getElementById("btn-signup");
+  if (btnLogin) btnLogin.onclick = function(){
+    if (!requireFirebase()) return;
+    const email = (document.getElementById("auth-email").value || "").trim();
+    const pass = document.getElementById("auth-pass").value || "";
+    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
+    fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
+      afterLogin(res.user);
+    }).catch(function(e){ toast(e.message || "Sign in failed"); });
+  };
+  if (btnSignup) btnSignup.onclick = function(){
+    if (!requireFirebase()) return;
+    const email = (document.getElementById("auth-email").value || "").trim();
+    const pass = document.getElementById("auth-pass").value || "";
+    const name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
+    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
+    if (name.length < 2) { toast("Pick a display name"); return; }
+    fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
+      return res.user.updateProfile({ displayName: name }).then(function(){
+        afterLogin(res.user, name);
+      });
+    }).catch(function(e){ toast(e.message || "Signup failed"); });
+  };
 
+  // session restore from Firebase Auth only (not local name)
   if (fbAuth) {
-    try { fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){}); } catch(e){}
-    fbAuth.getRedirectResult().then(function(res){
-      if (res && res.user) { status("Google OK", true); afterLogin(res.user, res.user.displayName); }
-    }).catch(function(e){ status(authErr(e)); });
     fbAuth.onAuthStateChanged(function(u){
       if (u) afterLogin(u, u.displayName);
     });
   }
-
-  window.__goLiveGoogle = function(){
-    status("Starting Google…");
-    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
-    if (typeof firebase === "undefined") { status("Firebase SDK not loaded — check internet"); return; }
-    if (!fbAuth) { status("Auth not ready — refresh"); return; }
-    var provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    // Mobile: redirect works; Desktop: popup then redirect fallback
-    var mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-    if (mobile) {
-      status("Redirecting to Google…");
-      fbAuth.signInWithRedirect(provider).catch(function(e){ status(authErr(e)); });
-      return;
-    }
-    fbAuth.signInWithPopup(provider).then(function(res){
-      if (res && res.user) { status("Signed in!", true); afterLogin(res.user, res.user.displayName); }
-    }).catch(function(e){
-      status(authErr(e));
-      fbAuth.signInWithRedirect(provider).catch(function(e2){ status(authErr(e2)); });
-    });
-  };
-
-  window.__goLiveLogin = function(){
-    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
-    if (!fbAuth) { status("Server not ready"); return; }
-    var email = ((document.getElementById("auth-email") || {}).value || "").trim();
-    var pass = ((document.getElementById("auth-pass") || {}).value || "");
-    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
-    status("Signing in…");
-    fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
-      status("Signed in!", true);
-      afterLogin(res.user, res.user.displayName);
-    }).catch(function(e){ status(authErr(e)); });
-  };
-
-  window.__goLiveSignup = function(){
-    try { if (!fbAuth && typeof initFirebase === "function") initFirebase(); } catch(e){}
-    if (!fbAuth) { status("Server not ready"); return; }
-    var email = ((document.getElementById("auth-email") || {}).value || "").trim();
-    var pass = ((document.getElementById("auth-pass") || {}).value || "");
-    var name = ((document.getElementById("auth-name") || {}).value || "").trim().slice(0, 24);
-    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
-    if (name.length < 2) { status("Display name required for signup"); return; }
-    status("Creating account…");
-    fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
-      return res.user.updateProfile({ displayName: name }).then(function(){
-        status("Account created!", true);
-        afterLogin(res.user, name);
-      });
-    }).catch(function(e){ status(authErr(e)); });
-  };
-
-  function bind(){
-    var g = document.getElementById("btn-google");
-    var li = document.getElementById("btn-login");
-    var su = document.getElementById("btn-signup");
-    if (g) g.onclick = function(ev){ if (ev) { ev.preventDefault(); } window.__goLiveGoogle(); };
-    if (li) li.onclick = function(ev){ if (ev) ev.preventDefault(); window.__goLiveLogin(); };
-    if (su) su.onclick = function(ev){ if (ev) ev.preventDefault(); window.__goLiveSignup(); };
-  }
-  bind();
-  setTimeout(bind, 300);
-  setTimeout(bind, 1200);
 })();
 
 // Disable old name-only enter if still present
@@ -10152,161 +9909,5 @@ setInterval(function(){
 
 })();
 </script>
-
-<script>
-/* Standalone login — runs even if main app script throws */
-(function(){
-  var CFG = {
-    apiKey: "AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo",
-    authDomain: "golive-ff5ad.firebaseapp.com",
-    projectId: "golive-ff5ad",
-    storageBucket: "golive-ff5ad.firebasestorage.app",
-    messagingSenderId: "994701431927",
-    appId: "1:994701431927:web:4e7615434facc5b54ae272",
-    databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com"
-  };
-
-  function status(msg, ok){
-    var el = document.getElementById("login-status");
-    if (el) {
-      el.style.color = ok ? "#4ade80" : "#f87171";
-      el.textContent = msg || "";
-    }
-    var toast = document.getElementById("toast");
-    if (toast && msg) {
-      toast.textContent = msg;
-      toast.classList.add("show");
-      setTimeout(function(){ toast.classList.remove("show"); }, 2500);
-    }
-  }
-
-  function goMenu(u, name){
-    try {
-      window.user = {
-        name: (name || u.displayName || (u.email && u.email.split("@")[0]) || "User").slice(0, 24),
-        uid: u.uid,
-        email: (u.email || "").toLowerCase()
-      };
-      // Main app reads window.user via syncUser()
-      var dn = document.getElementById("display-name");
-      if (dn) dn.textContent = window.user.name;
-      document.querySelectorAll(".screen").forEach(function(s){ s.classList.remove("active"); });
-      var menu = document.getElementById("menu");
-      if (menu) menu.classList.add("active");
-      status("Signed in as " + window.user.name, true);
-      try {
-        if (typeof afterLogin === "function") afterLogin(u, window.user.name);
-        if (typeof syncUser === "function") syncUser();
-        if (typeof renderLiveList === "function") renderLiveList();
-        if (typeof wireAdminUnlock === "function") wireAdminUnlock();
-      } catch(e){ console.warn(e); }
-    } catch(e){
-      status("Login UI error: " + e.message);
-      alert("Logged in but could not open menu: " + e.message);
-    }
-  }
-
-  function getAuth(){
-    if (typeof firebase === "undefined") return null;
-    try {
-      if (!firebase.apps.length) firebase.initializeApp(CFG);
-      return firebase.auth();
-    } catch(e){
-      try { return firebase.auth(); } catch(e2){ return null; }
-    }
-  }
-
-  function errMsg(e){
-    if (!e) return "Failed";
-    var c = e.code || "";
-    if (c.indexOf("unauthorized-domain") >= 0)
-      return "Add kobik8512-ctrl.github.io in Firebase Authorized domains";
-    if (c.indexOf("operation-not-allowed") >= 0)
-      return "Enable Google & Email in Firebase Sign-in method";
-    if (c.indexOf("popup") >= 0) return "Popup blocked — try again";
-    if (c.indexOf("invalid-credential") >= 0 || c.indexOf("wrong-password") >= 0)
-      return "Wrong email or password";
-    if (c.indexOf("user-not-found") >= 0) return "No account — Create account";
-    return (e.message || c || "Failed").slice(0, 120);
-  }
-
-  window.__goLiveGoogle = function(){
-    status("Starting Google…");
-    var auth = getAuth();
-    if (!auth) { status("Firebase not loaded — check network / refresh"); return; }
-    var provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    var mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-    if (mobile) {
-      status("Opening Google…");
-      auth.signInWithRedirect(provider).catch(function(e){ status(errMsg(e)); });
-      return;
-    }
-    auth.signInWithPopup(provider).then(function(res){
-      if (res && res.user) goMenu(res.user, res.user.displayName);
-    }).catch(function(e){
-      status(errMsg(e));
-      auth.signInWithRedirect(provider).catch(function(e2){ status(errMsg(e2)); });
-    });
-  };
-
-  window.__goLiveLogin = function(){
-    status("Signing in…");
-    var auth = getAuth();
-    if (!auth) { status("Firebase not loaded"); return; }
-    var email = (document.getElementById("auth-email").value || "").trim();
-    var pass = document.getElementById("auth-pass").value || "";
-    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
-    auth.signInWithEmailAndPassword(email, pass).then(function(res){
-      goMenu(res.user, res.user.displayName);
-    }).catch(function(e){ status(errMsg(e)); });
-  };
-
-  window.__goLiveSignup = function(){
-    status("Creating account…");
-    var auth = getAuth();
-    if (!auth) { status("Firebase not loaded"); return; }
-    var email = (document.getElementById("auth-email").value || "").trim();
-    var pass = document.getElementById("auth-pass").value || "";
-    var name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
-    if (!email || pass.length < 6) { status("Email + password (min 6)"); return; }
-    if (name.length < 2) { status("Need display name"); return; }
-    auth.createUserWithEmailAndPassword(email, pass).then(function(res){
-      return res.user.updateProfile({ displayName: name }).then(function(){
-        goMenu(res.user, name);
-      });
-    }).catch(function(e){ status(errMsg(e)); });
-  };
-
-  function wire(){
-    var g = document.getElementById("btn-google");
-    var li = document.getElementById("btn-login");
-    var su = document.getElementById("btn-signup");
-    if (g) g.onclick = function(e){ e.preventDefault(); window.__goLiveGoogle(); };
-    if (li) li.onclick = function(e){ e.preventDefault(); window.__goLiveLogin(); };
-    if (su) su.onclick = function(e){ e.preventDefault(); window.__goLiveSignup(); };
-  }
-
-  var auth = getAuth();
-  if (auth) {
-    auth.getRedirectResult().then(function(res){
-      if (res && res.user) goMenu(res.user, res.user.displayName);
-    }).catch(function(e){ status(errMsg(e)); });
-    auth.onAuthStateChanged(function(u){
-      if (u) goMenu(u, u.displayName);
-    });
-  } else {
-    status("Waiting for Firebase…");
-    setTimeout(function(){
-      if (!getAuth()) status("Firebase SDK failed — use Chrome & refresh");
-      else wire();
-    }, 1500);
-  }
-  wire();
-  setTimeout(wire, 400);
-  setTimeout(wire, 2000);
-})();
-</script>
-
 </body>
 </html>
