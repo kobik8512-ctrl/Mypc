@@ -8040,15 +8040,33 @@ function startRemoteBotRelay(){
 
 let joinAnnounceTimer = null;
 function joinSpeedGap(total){
-  // Gap BETWEEN each single join — never dump many at once
+  // Visible gap between EACH join on screen
   let gap;
-  if (total <= 10) gap = 520 + Math.random() * 380;
-  else if (total <= 100) gap = 380 + Math.random() * 280;
-  else if (total <= 1000) gap = 260 + Math.random() * 200;
-  else gap = 180 + Math.random() * 140;
+  if (total <= 10) gap = 700 + Math.random() * 500;
+  else if (total <= 100) gap = 550 + Math.random() * 400;
+  else if (total <= 1000) gap = 420 + Math.random() * 320;
+  else gap = 320 + Math.random() * 220;
   const spd = joinWaveSpeed || "medium";
-  const mul = spd === "slow" ? 2.4 : spd === "medium" ? 1.0 : spd === "fast" ? 0.55 : spd === "really" ? 0.32 : 0.18;
-  return Math.max(90, gap * mul);
+  const mul = spd === "slow" ? 2.2 : spd === "medium" ? 1.0 : spd === "fast" ? 0.65 : spd === "really" ? 0.42 : 0.28;
+  return Math.max(180, gap * mul); // never faster than 180ms
+}
+function paintJoinLine(name, text){
+  // Write JOIN straight to DOM — bypass chatQueue so rAF can't dump 30 at once
+  const list = document.getElementById("chat-list");
+  if (!list) return;
+  const div = document.createElement("div");
+  div.className = "msg join-line msg-new";
+  div.innerHTML = '<span class="join-icon">✨</span><span class="uname"></span><span class="body"></span>';
+  div.querySelector(".uname").textContent = name || "Someone";
+  div.querySelector(".body").textContent = text || "joined the live";
+  list.appendChild(div);
+  // trim DOM
+  const MAX_CHAT = 40;
+  while (list.children.length > MAX_CHAT) {
+    list.removeChild(list.firstChild);
+  }
+  list.scrollTop = list.scrollHeight;
+  setTimeout(function(){ div.classList.remove("msg-new"); }, 200);
 }
 function announceJoins(count, names, opts){
   opts = opts || {};
@@ -8063,21 +8081,28 @@ function announceJoins(count, names, opts){
     return;
   }
 
-  // Cap how many JOIN LINES we show (count can still go to 1k/1M in wave mode)
-  const maxAnn = total <= 15 ? total : (total <= 100 ? 28 : (total <= 1000 ? 40 : 55));
+  // Fewer on-screen join lines; count can still rise to full in wave mode
+  const maxAnn = total <= 10 ? total : (total <= 100 ? 22 : (total <= 1000 ? 32 : 42));
   let shown = 0;
   let chatsDuring = 0;
   const chatsTarget = 4 + Math.floor(Math.random() * 3);
   window._joinWaveActive = true;
-
   const countPerAnn = maxAnn > 0 ? (targetCount - startCount) / maxAnn : 0;
 
   function emitJoin(){
     const nm = (names && names[shown]) ? names[shown] : ((typeof nextName === "function") ? nextName() : ("user" + Math.floor(Math.random()*999)));
     const phrases = ["joined the live","just joined","is here now","hopped in","entered the live","welcome to the party"];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
+    // Host: paint local only (no queue). Also push FB for viewers one at a time.
     if (isHost) {
-      addMsg(nm, text, false, false, { join: true });
+      paintJoinLine(nm, text);
+      if (fbReady && fbDb && currentLiveId) {
+        try {
+          fbDb.ref("liveChat/" + currentLiveId).push({
+            name: nm, text: text, t: Date.now(), gift: false, me: false, uid: null, bot: true, join: true
+          });
+        } catch(e){}
+      }
     } else if (fbReady && fbDb && currentLiveId) {
       try {
         fbDb.ref("liveChat/" + currentLiveId).push({
@@ -8128,7 +8153,6 @@ function announceJoins(count, names, opts){
       return;
     }
 
-    // ALWAYS 1 join per tick — never 20–30 at once
     emitJoin();
     shown++;
     if (waveCount) {
@@ -8136,8 +8160,7 @@ function announceJoins(count, names, opts){
       publishCount();
     }
 
-    // Occasional side chat during wave (spread out)
-    if (chatsDuring < chatsTarget && Math.random() < 0.22) {
+    if (chatsDuring < chatsTarget && Math.random() < 0.2) {
       emitSideChat();
       chatsDuring++;
     }
@@ -8145,7 +8168,7 @@ function announceJoins(count, names, opts){
     joinAnnounceTimer = setTimeout(runOne, joinSpeedGap(total));
   }
 
-  joinAnnounceTimer = setTimeout(runOne, 250 + Math.random() * 250);
+  joinAnnounceTimer = setTimeout(runOne, 300 + Math.random() * 200);
 }
 
 
@@ -8606,7 +8629,11 @@ function scheduleJoin(){
   if (botCount > 500) burst = 1 + Math.floor(Math.random()*3);
   if (botCount > 3000) burst = 2 + Math.floor(Math.random()*5);
   if (botCount > 15000) burst = 3 + Math.floor(Math.random()*8);
-  botTimer = setTimeout(function(){ botCount += burst; updateCount(); scheduleJoin(); }, delay);
+  botTimer = setTimeout(function(){
+    // Don't auto-grow while join wave is animating
+    if (window._joinWaveActive) { scheduleJoin(); return; }
+    botCount += burst; updateCount(); scheduleJoin();
+  }, delay);
 }
 function scheduleLeave(){
   // Realistic churn: tiny % leave, not mass exits
@@ -9314,12 +9341,34 @@ function subscribeLiveChat(liveId){
     if (user && m.uid && user.uid && m.uid === user.uid) return;
     // Admin host already shows local bot lines; normal host still needs admin-relay bots
     if (isHost && !m.uid && isAdmin) return;
+    // Joins: throttle on receive so Firebase bursts never paint 20 at once
+    if (m.join) {
+      if (isHost && isAdmin) return; // already painted locally
+      window._pendingJoins = window._pendingJoins || [];
+      window._pendingJoins.push({ name: m.name || "user", text: m.text || "joined the live" });
+      if (!window._joinPaintTimer) {
+        window._joinPaintTimer = setInterval(function(){
+          if (!window._pendingJoins || !window._pendingJoins.length) {
+            clearInterval(window._joinPaintTimer);
+            window._joinPaintTimer = null;
+            return;
+          }
+          const j = window._pendingJoins.shift();
+          if (typeof paintJoinLine === "function") paintJoinLine(j.name, j.text);
+          else {
+            chatQueue.push({ name: j.name, text: j.text, join: true, _remote: true });
+            scheduleChatRender();
+          }
+        }, 280);
+      }
+      return;
+    }
     const o = {
       name: m.name || "user",
       text: m.text || "",
       host: !!m.me,
       gift: !!m.gift,
-      join: !!m.join,
+      join: false,
       _remote: true
     };
     chatQueue.push(o);
