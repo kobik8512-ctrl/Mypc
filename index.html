@@ -358,12 +358,29 @@ let fbReady = false, fbAuth = null, fbDb = null;
 let peerConnections = {};
 let viewerPC = null, viewerId = null;
 let unsubViewers = null, unsubLiveMeta = null, unsubChat = null;
-const ICE_SERVERS = { iceServers: [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
-]};
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
+    // TURN for cross-country / symmetric NAT (critical or video stays black)
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:80?transport=tcp",
+        "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",
+        "turns:openrelay.metered.ca:443"
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ],
+  iceCandidatePoolSize: 8
+};
 let liveTitle = "", currentLiveId = null;
 let stream = null, facingMode = "user", isMuted = false, camOn = true;
 let botCount = 0, realViewers = 0, likeCount = 0, botsPerClick = 1, hasLiked = false, chatPhase = "greet";
@@ -9398,6 +9415,16 @@ function listenForViewers(){
       realViewers = Math.max(0, n);
       updateCount();
       if (typeof publishLivePresence === "function") publishLivePresence();
+      // Force write so other devices see the count
+      if (fbReady && fbDb && currentLiveId) {
+        try {
+          fbDb.ref("lives/" + currentLiveId).update({
+            real: realViewers,
+            viewers: Math.max(0, (botCount || 0) + realViewers),
+            hb: Date.now()
+          });
+        } catch(e){}
+      }
     }).catch(function(){});
   }
   fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_added", function(snap){
@@ -9412,12 +9439,20 @@ function listenForViewers(){
     // Join message for real viewers
     const data = snap.val() || {};
     const nm = data.name || "Viewer";
-    // skip very first moment of host self-noise
-    setTimeout(function(){
-      if (isHost && currentLiveId) {
-        addMsg(nm, "joined the live", false, false, { join: true });
-      }
-    }, 300);
+    const uid = data.uid || snap.key;
+    // Debounce: same person reconnecting shouldn't spam join lines
+    window._recentJoins = window._recentJoins || {};
+    const now = Date.now();
+    if (window._recentJoins[uid] && now - window._recentJoins[uid] < 45000) {
+      // reconnect within 45s — no new join message
+    } else {
+      window._recentJoins[uid] = now;
+      setTimeout(function(){
+        if (isHost && currentLiveId && !window._skipJoinAnnounce) {
+          addMsg(nm, "joined the live", false, false, { join: true });
+        }
+      }, 300);
+    }
   });
   fbDb.ref("lives/" + currentLiveId + "/viewers").on("child_removed", function(snap){
     const vid = snap.key;
@@ -9448,15 +9483,15 @@ async function createHostPeer(viewerId){
 
   pc.onconnectionstatechange = function(){
     const st = pc.connectionState;
-    if (st === "failed" || st === "disconnected") {
-      // try ICE restart once
+    if (st === "failed") {
       try {
         pc.createOffer({ iceRestart: true }).then(function(offer){
           return pc.setLocalDescription(offer).then(function(){
             return fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/offer").set({
               type: pc.localDescription.type,
               sdp: pc.localDescription.sdp,
-              restart: Date.now()
+              restart: Date.now(),
+              ts: Date.now()
             });
           });
         }).catch(function(){});
@@ -9502,6 +9537,29 @@ async function createHostPeer(viewerId){
   } catch(e){ console.warn("host offer", e); }
 }
 
+
+async function softRejoinLive(id){
+  // Rebuild WebRTC only — do NOT clear chat or spam join messages
+  if (isHost || !id) return;
+  const keepChat = true;
+  const oldVid = viewerId;
+  if (viewerPC) {
+    try { viewerPC.ontrack = null; viewerPC.onicecandidate = null; viewerPC.onconnectionstatechange = null; viewerPC.close(); } catch(e){}
+    viewerPC = null;
+  }
+  if (oldVid && fbDb) {
+    try { await fbDb.ref("lives/" + id + "/viewers/" + oldVid).remove(); } catch(e){}
+    try { await fbDb.ref("lives/" + id + "/signals/" + oldVid).remove(); } catch(e){}
+  }
+  await new Promise(function(r){ setTimeout(r, 400); });
+  // re-enter without wiping UI
+  window._skipJoinAnnounce = true;
+  window._keepChatOnJoin = true;
+  await joinRemoteLive(id);
+  window._skipJoinAnnounce = false;
+  window._keepChatOnJoin = false;
+}
+
 async function joinRemoteLive(id){
   const L = onlineLives[id];
   if (!L) { toast("Live ended"); return; }
@@ -9524,10 +9582,13 @@ async function joinRemoteLive(id){
   liveTitle = L.title || "Live";
   liveRegion = L.region || "en";
   botCount = Number(L.bots) || 0;
-  realViewers = Math.max(0, Number(L.viewers) || 1);
+  if (L.real != null) realViewers = Math.max(0, Number(L.real) || 0);
+  else realViewers = Math.max(0, (Number(L.viewers) || 0) - botCount);
   likeCount = Number(L.likes) || 0;
   document.getElementById("live-title-text").textContent = liveTitle;
-  document.getElementById("chat-list").replaceChildren();
+  if (!window._keepChatOnJoin) {
+    document.getElementById("chat-list").replaceChildren();
+  }
   document.getElementById("btn-like").classList.remove("liked");
 
   const lv = document.getElementById("local-video");
@@ -9584,6 +9645,7 @@ async function joinRemoteLive(id){
   try {
     await fbDb.ref("lives/" + id + "/viewers/" + viewerId).set({
       name: user ? user.name : "Viewer",
+      uid: user && user.uid ? user.uid : null,
       joinedAt: Date.now()
     });
   } catch(e){ console.warn("register viewer", e); }
@@ -9621,17 +9683,44 @@ async function joinRemoteLive(id){
 
   viewerPC.onconnectionstatechange = function(){
     const cs = viewerPC && viewerPC.connectionState;
-    if (cs === "failed" || cs === "disconnected") {
+    if (cs === "connected" || cs === "completed") {
+      if (st) { st.textContent = "Connected"; st.style.color = "var(--green)"; }
+      window._joinTries = 0;
+    } else if (cs === "disconnected") {
+      // Often temporary — wait, don't full-rejoin (that clears chat + spam joins)
       if (st) { st.textContent = "Reconnecting..."; st.style.color = "var(--muted)"; }
-      // force re-register to trigger new host offer
       setTimeout(function(){
-        if (!isHost && currentLiveId === id && viewerId) {
-          const old = viewerId;
-          fbDb.ref("lives/" + id + "/viewers/" + old).remove().catch(function(){});
-          // rejoin soft
-          joinRemoteLive(id);
+        if (!viewerPC || viewerPC.connectionState === "connected") return;
+        if (viewerPC.connectionState === "failed" || viewerPC.connectionState === "disconnected") {
+          try {
+            viewerPC.createOffer({ iceRestart: true }).then(function(offer){
+              return viewerPC.setLocalDescription(offer);
+            }).then(function(){
+              if (fbDb && currentLiveId && viewerId && viewerPC.localDescription) {
+                return fbDb.ref("lives/" + currentLiveId + "/signals/" + viewerId + "/offer").set({
+                  type: viewerPC.localDescription.type,
+                  sdp: viewerPC.localDescription.sdp,
+                  restart: Date.now(),
+                  ts: Date.now()
+                });
+              }
+            }).catch(function(){});
+          } catch(e){}
         }
-      }, 1500);
+      }, 2500);
+    } else if (cs === "failed") {
+      if (st) { st.textContent = "Reconnecting..."; st.style.color = "var(--muted)"; }
+      window._joinTries = (window._joinTries || 0) + 1;
+      // Full rejoin only after hard fail, max 2 times, keep chat
+      if (window._joinTries <= 2) {
+        setTimeout(function(){
+          if (!isHost && currentLiveId === id) {
+            softRejoinLive(id);
+          }
+        }, 2000);
+      } else if (st) {
+        st.textContent = "Connection issue — try leaving and joining again";
+      }
     }
   };
 
@@ -9675,16 +9764,16 @@ async function joinRemoteLive(id){
     viewerPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
   });
 
-  // If no track after 8s, retry join once
-  window._joinTries = (window._joinTries || 0) + 1;
+  // If no track after 10s, soft ICE restart once (don't wipe chat)
   setTimeout(function(){
-    if (!gotTrack && currentLiveId === id && !isHost && (window._joinTries || 0) < 3) {
+    if (!gotTrack && currentLiveId === id && !isHost && (window._joinTries || 0) < 2) {
       if (st) st.textContent = "Retrying video...";
-      joinRemoteLive(id);
+      window._joinTries = (window._joinTries || 0) + 1;
+      softRejoinLive(id);
     } else if (gotTrack) {
       window._joinTries = 0;
     }
-  }, 8000);
+  }, 10000);
 }
 
 function afterLogin(u, displayName){
