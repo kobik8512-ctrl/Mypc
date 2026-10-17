@@ -313,6 +313,7 @@ body.cinema-mode #stream-chat-overlay .sco-line{font-size:.85rem;padding:8px 12p
   <div class="more-label">Tools</div>
   <div class="more-row" id="more-ask">Poll chat</div>
   <div class="more-row admin-only" id="more-phrase">Chat phrase</div>
+  <div class="more-row" id="more-popchat">Pop-out chat (desktop)</div>
   <div class="more-row admin-only" id="more-bots">Add viewers</div>
   <div class="more-row admin-only" id="more-speed">Chat speed</div>
 </div>
@@ -9050,28 +9051,101 @@ function pushChatToFirebase(name, text, isMe, isGift, extra){
 function pushStreamOverlay(name, text, opts){
   opts = opts || {};
   var box = document.getElementById("stream-chat-overlay");
-  if (!box) return;
-  var line = document.createElement("div");
-  line.className = "sco-line" + (opts.gift ? " gift" : "") + (opts.join ? " join" : "");
-  var nm = document.createElement("span");
-  nm.className = "sco-name";
-  var colors = ["#ff6b9d","#5ac8fa","#30d158","#ffd60a","#bf5af2","#ff9f0a","#64d2ff","#ff375f"];
-  nm.style.color = colors[Math.abs(String(name||"x").split("").reduce(function(a,c){return a+c.charCodeAt(0)},0)) % colors.length];
-  nm.textContent = name || "user";
-  line.appendChild(nm);
-  line.appendChild(document.createTextNode(String(text || "").slice(0, 120)));
-  box.appendChild(line);
-  // keep last ~12 lines
-  while (box.children.length > 12) box.removeChild(box.firstChild);
-  // auto-remove after a few seconds so it stays readable
-  setTimeout(function(){
-    if (line.parentNode) {
-      line.style.transition = "opacity .4s";
-      line.style.opacity = "0";
-      setTimeout(function(){ if (line.parentNode) line.parentNode.removeChild(line); }, 400);
+  if (box) {
+    var line = document.createElement("div");
+    line.className = "sco-line" + (opts.gift ? " gift" : "") + (opts.join ? " join" : "");
+    var nm = document.createElement("span");
+    nm.className = "sco-name";
+    var colors = ["#ff6b9d","#5ac8fa","#30d158","#ffd60a","#bf5af2","#ff9f0a","#64d2ff","#ff375f"];
+    nm.style.color = colors[Math.abs(String(name||"x").split("").reduce(function(a,c){return a+c.charCodeAt(0)},0)) % colors.length];
+    nm.textContent = name || "user";
+    line.appendChild(nm);
+    line.appendChild(document.createTextNode(String(text || "").slice(0, 120)));
+    box.appendChild(line);
+    while (box.children.length > 12) box.removeChild(box.firstChild);
+    setTimeout(function(){
+      if (line.parentNode) {
+        line.style.transition = "opacity .4s";
+        line.style.opacity = "0";
+        setTimeout(function(){ if (line.parentNode) line.parentNode.removeChild(line); }, 400);
+      }
+    }, opts.join ? 4000 : 7000);
+  }
+  // Also send to desktop pop-out window (real screen overlay while gaming)
+  try {
+    if (window._chatPopout && !window._chatPopout.closed) {
+      window._chatPopout.postMessage({
+        type: "golive-chat",
+        name: name || "user",
+        text: String(text || "").slice(0, 140),
+        gift: !!opts.gift,
+        join: !!opts.join
+      }, "*");
     }
-  }, opts.join ? 4000 : 7000);
+  } catch(e){}
 }
+
+function openChatPopout(){
+  try {
+    if (window._chatPopout && !window._chatPopout.closed) {
+      window._chatPopout.focus();
+      toast("Chat window already open — drag it to your game corner");
+      return;
+    }
+  } catch(e){}
+  var w = 320, h = 520;
+  var left = Math.max(0, (screen.width || 800) - w - 24);
+  var top = 80;
+  var features = "width=" + w + ",height=" + h + ",left=" + left + ",top=" + top + ",resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no";
+  var pop = window.open("", "golive_chat_popout", features);
+  if (!pop) {
+    toast("Allow pop-ups for this site to open desktop chat");
+    return;
+  }
+  window._chatPopout = pop;
+  var html = "<!DOCTYPE html><html><head><meta charset=UTF-8><title>Live Chat</title><style>"
+    + "*{box-sizing:border-box;margin:0;padding:0}"
+    + "html,body{width:100%;height:100%;background:rgba(8,8,12,.55);font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;overflow:hidden}"
+    + "body{display:flex;flex-direction:column;padding:10px}"
+    + ".head{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:8px}"
+    + "#lines{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px}"
+    + ".line{background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:7px 10px;font-size:13px;line-height:1.35;word-break:break-word;animation:in .18s ease}"
+    + ".line .n{font-weight:700;margin-right:6px}"
+    + ".line.gift{border-color:rgba(255,214,10,.4);color:#ffd60a}"
+    + ".line.join{border-color:rgba(48,209,88,.35)}"
+    + "@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}"
+    + ".tip{font-size:10px;color:rgba(255,255,255,.4);margin-top:8px;text-align:center}"
+    + "</style></head><body>"
+    + "<div class=head>Live chat · drag this window over your game</div>"
+    + "<div id=lines></div>"
+    + "<div class=tip>Share Entire screen so viewers see this too</div>"
+    + "<script>"
+    + "var colors=['#ff6b9d','#5ac8fa','#30d158','#ffd60a','#bf5af2','#ff9f0a','#64d2ff','#ff375f'];"
+    + "function add(d){"
+    + "var box=document.getElementById('lines');if(!box||!d)return;"
+    + "var el=document.createElement('div');el.className='line'+(d.gift?' gift':'')+(d.join?' join':'');"
+    + "var n=document.createElement('span');n.className='n';"
+    + "var s=String(d.name||'user');var h=0;for(var i=0;i<s.length;i++)h+=s.charCodeAt(i);"
+    + "n.style.color=colors[Math.abs(h)%colors.length];n.textContent=s;"
+    + "el.appendChild(n);el.appendChild(document.createTextNode(String(d.text||'')));"
+    + "box.appendChild(el);while(box.children.length>14)box.removeChild(box.firstChild);"
+    + "setTimeout(function(){if(el.parentNode){el.style.opacity='0';el.style.transition='opacity .4s';setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el)},400)}},d.join?4000:8000);"
+    + "}"
+    + "window.addEventListener('message',function(e){if(e.data&&e.data.type==='golive-chat')add(e.data)});"
+    + "<\\/script></body></html>";
+  pop.document.open();
+  pop.document.write(html);
+  pop.document.close();
+  toast("Chat window opened — put it on your desktop corner, then share Entire screen");
+}
+
+(function(){
+  var b = document.getElementById("more-popchat");
+  if (b) b.onclick = function(){
+    openChatPopout();
+    try { document.getElementById("more-menu").classList.remove("show"); } catch(e){}
+  };
+})();
 
 function addMsg(name, text, host, isGift, extra){
   const o = { name: name, text: text, host: !!host, gift: !!isGift };
