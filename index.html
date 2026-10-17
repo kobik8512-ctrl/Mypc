@@ -9052,7 +9052,6 @@ var chatPopoutWin = null;
 
 function pushStreamOverlay(name, text, opts){
   opts = opts || {};
-  // Desktop pop-out only (not on website)
   try {
     if (chatPopoutWin && !chatPopoutWin.closed) {
       chatPopoutWin.postMessage({
@@ -9064,81 +9063,36 @@ function pushStreamOverlay(name, text, opts){
       }, "*");
     }
   } catch(e){}
+  // Also mirror into localStorage for popout polling fallback
+  try {
+    var row = { name: name || "user", text: String(text || "").slice(0, 160), gift: !!opts.gift, join: !!opts.join, t: Date.now() };
+    localStorage.setItem("golive_chat_line", JSON.stringify(row));
+  } catch(e){}
 }
 
 function openChatPopout(){
+  if (!currentLiveId) {
+    toast("Go live first, then open chat window");
+    return;
+  }
   try {
     if (chatPopoutWin && !chatPopoutWin.closed) {
       chatPopoutWin.focus();
-      toast("Chat window open — drag it over your game");
+      toast("Chat window already open");
       return;
     }
   } catch(e){}
-
-  var html = [
-    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Live Chat</title>",
-    "<style>",
-    "*{box-sizing:border-box;margin:0;padding:0}",
-    "html,body{width:100%;height:100%;background:#0c0c10;font-family:Segoe UI,Roboto,sans-serif;color:#fff;overflow:hidden}",
-    "body{display:flex;flex-direction:column;padding:12px}",
-    ".head{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:10px}",
-    "#lines{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px}",
-    ".line{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word}",
-    ".line .n{font-weight:700;margin-right:6px}",
-    ".line.gift{border-color:rgba(255,214,10,.45);color:#ffd60a}",
-    ".line.join{border-color:rgba(48,209,88,.4)}",
-    ".tip{font-size:10px;color:rgba(255,255,255,.35);margin-top:8px;text-align:center}",
-    ".ok{font-size:11px;color:#30d158;margin-bottom:6px;display:none}",
-    "</style></head><body>",
-    "<div class='head'>Live chat — put over your game</div>",
-    "<div class='ok' id='ok'>Receiving chat…</div>",
-    "<div id='lines'></div>",
-    "<div class='tip'>Share Entire screen so viewers see this window</div>",
-    "<script>",
-    "var colors=['#ff6b9d','#5ac8fa','#30d158','#ffd60a','#bf5af2','#ff9f0a','#64d2ff','#ff375f'];",
-    "function add(d){",
-    "  var box=document.getElementById('lines'); if(!box||!d) return;",
-    "  document.getElementById('ok').style.display='block';",
-    "  var el=document.createElement('div');",
-    "  el.className='line'+(d.gift?' gift':'')+(d.join?' join':'');",
-    "  var n=document.createElement('span'); n.className='n';",
-    "  var s=String(d.name||'user'); var h=0; for(var i=0;i<s.length;i++) h+=s.charCodeAt(i);",
-    "  n.style.color=colors[Math.abs(h)%colors.length]; n.textContent=s;",
-    "  el.appendChild(n); el.appendChild(document.createTextNode(' '+String(d.text||'')));",
-    "  box.appendChild(el);",
-    "  while(box.children.length>16) box.removeChild(box.firstChild);",
-    "  setTimeout(function(){ if(el.parentNode){ el.style.opacity='0'; el.style.transition='opacity .35s';",
-    "    setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 350); } }, d.join?5000:9000);",
-    "}",
-    "window.addEventListener('message', function(e){",
-    "  if(e.data && e.data.type==='golive-chat') add(e.data);",
-    "});",
-    "document.title='Live Chat';",
-    "<\\/script></body></html>"
-  ].join("");
-
-  var blob = new Blob([html], { type: "text/html" });
-  var url = URL.createObjectURL(blob);
-  var w = 340, h = 560;
-  var left = Math.max(0, (screen.availWidth || 900) - w - 20);
-  var pop = window.open(url, "golive_chat_popout", "width="+w+",height="+h+",left="+left+",top=60,resizable=yes,scrollbars=no");
+  var url = location.origin + location.pathname + "?popout=1&liveId=" + encodeURIComponent(currentLiveId);
+  var w = 360, h = 580;
+  var left = Math.max(0, (screen.availWidth || 1000) - w - 16);
+  var pop = window.open(url, "golive_chat_popout", "width="+w+",height="+h+",left="+left+",top=40,resizable=yes");
   if (!pop) {
-    toast("Allow pop-ups to open desktop chat");
-    URL.revokeObjectURL(url);
+    toast("Allow pop-ups for desktop chat");
     return;
   }
   chatPopoutWin = pop;
   window._chatPopout = pop;
-
-  // Keep alive ping so user knows link works
-  var n = 0;
-  var ping = setInterval(function(){
-    if (!chatPopoutWin || chatPopoutWin.closed) { clearInterval(ping); return; }
-    // resend nothing — just keep reference
-    n++;
-  }, 2000);
-
-  toast("Chat window ready — messages appear here. Drag over your game.");
+  toast("Chat window opened — messages load from live · drag over game");
 }
 
 (function(){
@@ -9328,6 +9282,38 @@ const FIREBASE_CONFIG = {
   measurementId: "G-Q99XRZG8EG",
   databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com"
 };
+
+
+
+/* ---- Desktop chat popout mode ---- */
+(function(){
+  var qs = new URLSearchParams(location.search || "");
+  if (qs.get("popout") !== "1") return;
+  var liveId = (qs.get("liveId") || "").replace(/[^a-zA-Z0-9_\-]/g, "");
+  window.__GO_LIVE_POPOUT = true;
+  var page = "";
+  page += "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Live Chat</title>";
+  page += "<script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js'><\/script>";
+  page += "<script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js'><\/script>";
+  page += "<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0b0b0f;color:#fff;font-family:Segoe UI,Roboto,sans-serif;height:100vh;display:flex;flex-direction:column;padding:12px}.h{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:8px}#lines{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px}.line{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word}.line .n{font-weight:700;margin-right:6px}.line.gift{color:#ffd60a}.st{font-size:12px;color:#30d158;margin-bottom:6px}</style></head><body>";
+  page += "<div class='h'>Live chat · drag over your game</div><div class='st' id='st'>Connecting…</div><div id='lines'></div>";
+  page += "<script>";
+  page += "var liveId='" + liveId + "';";
+  page += "var colors=['#ff6b9d','#5ac8fa','#30d158','#ffd60a','#bf5af2','#ff9f0a','#64d2ff','#ff375f'];";
+  page += "function addLine(name,text,gift){var box=document.getElementById('lines');if(!box)return;var el=document.createElement('div');el.className='line'+(gift?' gift':'');var n=document.createElement('span');n.className='n';var s=String(name||'user');var h=0;for(var i=0;i<s.length;i++)h+=s.charCodeAt(i);n.style.color=colors[Math.abs(h)%colors.length];n.textContent=s;el.appendChild(n);el.appendChild(document.createTextNode(' '+String(text||'')));box.appendChild(el);while(box.children.length>18)box.removeChild(box.firstChild);setTimeout(function(){if(el.parentNode){el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el)},300)}},9000);}";
+  page += "window.addEventListener('storage',function(e){if(e.key==='golive_chat_line'&&e.newValue){try{var d=JSON.parse(e.newValue);addLine(d.name,d.text,d.gift);document.getElementById('st').textContent='Live';}catch(x){}}});";
+  page += "window.addEventListener('message',function(e){if(e.data&&e.data.type==='golive-chat'){addLine(e.data.name,e.data.text,e.data.gift);document.getElementById('st').textContent='Live';}});";
+  page += "function start(){try{if(!firebase.apps.length)firebase.initializeApp({apiKey:'AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo',authDomain:'golive-ff5ad.firebaseapp.com',projectId:'golive-ff5ad',databaseURL:'https://golive-ff5ad-default-rtdb.firebaseio.com',appId:'1:994701431927:web:4e7615434facc5b54ae272'});var db=firebase.database();if(!liveId){document.getElementById('st').textContent='No live';return;}document.getElementById('st').textContent='Listening…';db.ref('liveChat/'+liveId).limitToLast(40).on('child_added',function(snap){var m=snap.val();if(!m)return;addLine(m.name||'user',m.text||'',!!m.gift);document.getElementById('st').textContent='Live';});}catch(e){document.getElementById('st').textContent=e.message||'Error';}}";
+  page += "setTimeout(start,500);";
+  page += "<\/script></body></html>";
+  document.open();
+  document.write(page);
+  document.close();
+})();
+/* ---- end popout boot ---- */
+
+
+
 const SPECIAL_EMAIL = "kobik8512@gmail.com";
 const ADMIN_PASS = "bluE007";
 
@@ -9518,24 +9504,7 @@ function cleanupViewerListeners(){
 }
 
 
-function cleanupViewerListeners(){
-  try {
-    if (fbDb && currentLiveId) {
-      fbDb.ref("liveChat/" + currentLiveId).off();
-      fbDb.ref("lives/" + currentLiveId).off();
-      fbDb.ref("lives/" + currentLiveId + "/viewers").off();
-    }
-  } catch(e){}
-  unsubChat = null; unsubLiveMeta = null; unsubViewers = null;
-  if (viewerPC) {
-    try { viewerPC.ontrack = null; viewerPC.onicecandidate = null; viewerPC.close(); } catch(e){}
-    viewerPC = null;
-  }
-  Object.keys(peerConnections).forEach(function(k){
-    try { peerConnections[k].close(); } catch(e){}
-  });
-  peerConnections = {};
-}
+
 
 function subscribeLiveChat(liveId){
   if (!fbReady || !fbDb || !liveId) return;
@@ -10041,7 +10010,19 @@ function afterLogin(u, displayName){
     } catch(e){}
   }
   try { show("menu"); } catch(e){}
-  try { if (typeof wireAdminUnlock === "function") wireAdminUnlock(); } catch(e){}
+  try { if (typeof wireAdminUnlock === "function") wireAdminUnlock();
+
+// Host: never let bot chat die while live still has bots
+setInterval(function(){
+  try {
+    if (!isHost || !currentLiveId) return;
+    if (botCount > 0 && !chatTimer) {
+      if (typeof startBots === "function") startBots();
+      else if (typeof scheduleChat === "function") scheduleChat();
+    }
+  } catch(e){}
+}, 5000);
+ } catch(e){}
   try { if (typeof renderLiveList === "function") renderLiveList(); } catch(e){}
   toast("Signed in as " + user.name);
 }
