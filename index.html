@@ -9035,30 +9035,56 @@ function flushChatQueue(){
 }
 let _fbChatLast = 0;
 let _fbChatBurst = 0;
+
+var _fbChatBuf = [];
+var _fbChatFlushTimer = null;
+function flushFbChatBuf(){
+  _fbChatFlushTimer = null;
+  if (!fbReady || !fbDb || !currentLiveId || !_fbChatBuf.length) return;
+  var batch = _fbChatBuf.splice(0, 15);
+  batch.forEach(function(payload){
+    try { fbDb.ref("liveChat/" + currentLiveId).push(payload); } catch(e){}
+  });
+  if (_fbChatBuf.length) {
+    _fbChatFlushTimer = setTimeout(flushFbChatBuf, 80);
+  }
+}
+
 function pushChatToFirebase(name, text, isMe, isGift, extra){
   if (!fbReady || !fbDb || !currentLiveId) return;
   const now = Date.now();
-  // Rate-limit bot spam only (host bot lines) — never rate-limit joins
-  if (isHost && !isMe && !isGift && !(extra && extra.join)) {
+  const payload = {
+    name: String(name || "user").slice(0, 40),
+    text: String(text || "").slice(0, 200),
+    t: now,
+    gift: !!isGift,
+    me: !!isMe,
+    uid: user && user.uid ? user.uid : null
+  };
+  if (extra && extra.join) payload.join = true;
+
+  // High-volume bot chat: buffer so viewers still get messages (not only gifts)
+  if (isHost && !isMe && !isGift && !payload.join) {
+    if (!_fbChatWindow) { _fbChatWindow = now; _fbChatBurst = 0; }
+    if (now - _fbChatWindow >= 1000) { _fbChatWindow = now; _fbChatBurst = 0; }
     _fbChatBurst++;
-    if (now - _fbChatLast < 150 && _fbChatBurst > 6) return;
-    if (now - _fbChatLast >= 1000) { _fbChatBurst = 0; _fbChatLast = now; }
-  } else {
-    _fbChatLast = now;
+    if (_fbChatBurst > 30) {
+      // queue overflow lines instead of dropping
+      if (!_fbChatBuf) _fbChatBuf = [];
+      if (_fbChatBuf.length < 200) _fbChatBuf.push(payload);
+      if (!_fbChatFlushTimer) _fbChatFlushTimer = setTimeout(flushFbChatBuf, 50);
+      return;
+    }
   }
   try {
-    const payload = {
-      name: String(name || "user").slice(0, 40),
-      text: String(text || "").slice(0, 200),
-      t: now,
-      gift: !!isGift,
-      me: !!isMe,
-      uid: user && user.uid ? user.uid : null
-    };
-    if (extra && extra.join) payload.join = true;
     fbDb.ref("liveChat/" + currentLiveId).push(payload);
   } catch(e){}
+  // keep draining buffer
+  if (_fbChatBuf && _fbChatBuf.length && !_fbChatFlushTimer) {
+    _fbChatFlushTimer = setTimeout(flushFbChatBuf, 50);
+  }
 }
+
 
 var chatPopoutWin = null;
 
@@ -9374,7 +9400,11 @@ const FIREBASE_CONFIG = {
         return;
       }
       document.getElementById("st").textContent = "Listening…";
-      db.ref("liveChat/" + liveId).limitToLast(40).on("child_added", function(snap){
+      var _seen = {};
+      db.ref("liveChat/" + liveId).limitToLast(30).on("child_added", function(snap){
+        var key = snap.key;
+        if (!key || _seen[key]) return;
+        _seen[key] = true;
         var m = snap.val();
         if (!m) return;
         addLine(m.name || "user", m.text || "", !!m.gift);
