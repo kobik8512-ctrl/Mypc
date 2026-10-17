@@ -237,7 +237,6 @@ body.cinema-mode #stream-chat-overlay .sco-line{font-size:.85rem;padding:8px 12p
     <div class="login-logo">GO <span>LIVE</span></div>
     <div class="login-sub">Sign in with Google or create an account</div>
     <button class="btn-enter" id="btn-google" style="background:#fff;color:#111;margin-bottom:12px">Continue with Google</button>
-    <div id="login-status" style="text-align:center;color:#f87171;font-size:.8rem;min-height:1.2em;margin:8px 0"></div>
     <div style="text-align:center;color:var(--muted);font-size:.75rem;margin:6px 0">or</div>
     <input type="email" id="auth-email" placeholder="Email" autocomplete="email" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
     <input type="password" id="auth-pass" placeholder="Password (min 6)" autocomplete="current-password" style="width:100%;margin-bottom:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card,#1a1d27);color:#fff;font-size:.95rem;outline:none;box-sizing:border-box"/>
@@ -9954,17 +9953,10 @@ function afterLogin(u, displayName){
       }).catch(function(){});
     } catch(e){}
   }
-  try { show("menu"); } catch(e){ console.warn(e); }
-  try {
-    document.querySelectorAll(".screen").forEach(function(s){ s.classList.remove("active"); });
-    var menu = document.getElementById("menu");
-    if (menu) menu.classList.add("active");
-  } catch(e){}
+  show("menu");
   if (typeof wireAdminUnlock === "function") wireAdminUnlock();
   if (typeof renderLiveList === "function") renderLiveList();
   toast("Signed in as " + user.name);
-  var st = document.getElementById("login-status");
-  if (st) { st.style.color = "#4ade80"; st.textContent = "Signed in as " + user.name; }
 }
 
 function requireFirebase(){
@@ -9976,117 +9968,68 @@ function requireFirebase(){
 }
 
 (function(){
-  function setLoginStatus(msg, ok){
-    var el = document.getElementById("login-status");
-    if (el) {
-      el.style.color = ok ? "#4ade80" : "#f87171";
-      el.textContent = msg || "";
-    }
-    if (msg) try { toast(msg); } catch(e){}
-  }
-
   initFirebase();
-  if (!fbAuth) {
-    setLoginStatus("Firebase not ready — refresh");
-    return;
-  }
-
-  try {
-    fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-  } catch(e){}
-
-  // 1) Already signed in (other phone / refresh)
-  try {
-    if (fbAuth.currentUser) {
-      afterLogin(fbAuth.currentUser, fbAuth.currentUser.displayName);
-    }
-  } catch(e){}
-
-  // 2) Finish Google redirect (critical on mobile)
-  setLoginStatus("Checking sign-in…");
-  fbAuth.getRedirectResult().then(function(res){
-    if (res && res.user) {
-      setLoginStatus("Signed in!", true);
-      afterLogin(res.user, res.user.displayName);
-    } else {
-      // clear "Checking…" if still on login
-      var el = document.getElementById("login-status");
-      if (el && el.textContent.indexOf("Checking") === 0) el.textContent = "";
-    }
-  }).catch(function(e){
-    var msg = (e && e.message) ? e.message : "Google redirect failed";
-    if (e && e.code === "auth/unauthorized-domain") {
-      msg = "Add kobik8512-ctrl.github.io in Firebase → Auth → Authorized domains";
-    }
-    setLoginStatus(msg);
-    console.warn("getRedirectResult", e);
-  });
-
-  // 3) Session listener
-  fbAuth.onAuthStateChanged(function(u){
-    if (u) {
-      afterLogin(u, u.displayName);
-    }
-  });
-
-  var gbtn = document.getElementById("btn-google");
+  const gbtn = document.getElementById("btn-google");
   if (gbtn) gbtn.onclick = function(){
     if (!requireFirebase()) return;
-    var provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
+    const provider = new firebase.auth.GoogleAuthProvider();
     gbtn.disabled = true;
-    setLoginStatus("Opening Google…");
-    // Mobile + desktop: redirect is more reliable than popup on phones
-    var mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     if (mobile) {
+      toast("Opening Google…");
       fbAuth.signInWithRedirect(provider).catch(function(e){
-        setLoginStatus(e.message || "Google failed");
+        toast(e.message || "Google failed");
         gbtn.disabled = false;
       });
       return;
     }
     fbAuth.signInWithPopup(provider).then(function(res){
-      if (res && res.user) {
-        setLoginStatus("Signed in!", true);
-        afterLogin(res.user, res.user.displayName);
-      }
+      afterLogin(res.user, res.user.displayName);
     }).catch(function(e){
-      setLoginStatus((e && e.message) || "Popup failed — trying redirect…");
+      toast(e.message || "Google sign in failed");
       fbAuth.signInWithRedirect(provider).catch(function(e2){
-        setLoginStatus(e2.message || "Google failed");
-        gbtn.disabled = false;
+        toast(e2.message || "Google failed");
       });
     }).finally(function(){ gbtn.disabled = false; });
   };
+  // Return from Google redirect
+  if (fbAuth) {
+    fbAuth.getRedirectResult().then(function(res){
+      if (res && res.user) afterLogin(res.user, res.user.displayName);
+    }).catch(function(){});
+  }
 
-  var btnLogin = document.getElementById("btn-login");
-  var btnSignup = document.getElementById("btn-signup");
+  const btnLogin = document.getElementById("btn-login");
+  const btnSignup = document.getElementById("btn-signup");
   if (btnLogin) btnLogin.onclick = function(){
     if (!requireFirebase()) return;
-    var email = (document.getElementById("auth-email").value || "").trim();
-    var pass = document.getElementById("auth-pass").value || "";
-    if (!email || pass.length < 6) { setLoginStatus("Email + password (min 6)"); return; }
-    setLoginStatus("Signing in…");
+    const email = (document.getElementById("auth-email").value || "").trim();
+    const pass = document.getElementById("auth-pass").value || "";
+    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
     fbAuth.signInWithEmailAndPassword(email, pass).then(function(res){
-      setLoginStatus("Signed in!", true);
-      afterLogin(res.user, res.user.displayName);
-    }).catch(function(e){ setLoginStatus(e.message || "Sign in failed"); });
+      afterLogin(res.user);
+    }).catch(function(e){ toast(e.message || "Sign in failed"); });
   };
   if (btnSignup) btnSignup.onclick = function(){
     if (!requireFirebase()) return;
-    var email = (document.getElementById("auth-email").value || "").trim();
-    var pass = document.getElementById("auth-pass").value || "";
-    var name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
-    if (!email || pass.length < 6) { setLoginStatus("Email + password (min 6)"); return; }
-    if (name.length < 2) { setLoginStatus("Display name required"); return; }
-    setLoginStatus("Creating account…");
+    const email = (document.getElementById("auth-email").value || "").trim();
+    const pass = document.getElementById("auth-pass").value || "";
+    const name = (document.getElementById("auth-name").value || "").trim().slice(0, 24);
+    if (!email || pass.length < 6) { toast("Email + password (min 6)"); return; }
+    if (name.length < 2) { toast("Pick a display name"); return; }
     fbAuth.createUserWithEmailAndPassword(email, pass).then(function(res){
       return res.user.updateProfile({ displayName: name }).then(function(){
-        setLoginStatus("Account created!", true);
         afterLogin(res.user, name);
       });
-    }).catch(function(e){ setLoginStatus(e.message || "Signup failed"); });
+    }).catch(function(e){ toast(e.message || "Signup failed"); });
   };
+
+  // session restore from Firebase Auth only (not local name)
+  if (fbAuth) {
+    fbAuth.onAuthStateChanged(function(u){
+      if (u) afterLogin(u, u.displayName);
+    });
+  }
 })();
 
 // Disable old name-only enter if still present
