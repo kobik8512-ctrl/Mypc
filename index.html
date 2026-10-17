@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+(function(){
+  try {
+    var qs = new URLSearchParams(location.search || "");
+    if (qs.get("popout") !== "1") return;
+    window.__GO_LIVE_POPOUT = true;
+    window.__GO_LIVE_POPOUT_ID = (qs.get("liveId") || "").replace(/[^a-zA-Z0-9_\-]/g, "");
+  } catch(e){}
+})();
+</script>
+
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <title>Go Live · Offline</title>
@@ -7261,6 +7272,7 @@ function subscribeHostBotCount(liveId){
 }
 
 async function startHost(title){
+  if (window.__GO_LIVE_POPOUT) return;
   isHost = true;
   setTimeout(function(){
     var b = document.getElementById("btn-screen");
@@ -9082,7 +9094,7 @@ function openChatPopout(){
       return;
     }
   } catch(e){}
-  var url = location.origin + location.pathname + "?popout=1&liveId=" + encodeURIComponent(currentLiveId);
+  var url = location.href.split("?")[0].split("#")[0] + "?popout=1&liveId=" + encodeURIComponent(currentLiveId);
   var w = 360, h = 580;
   var left = Math.max(0, (screen.availWidth || 1000) - w - 16);
   var pop = window.open(url, "golive_chat_popout", "width="+w+",height="+h+",left="+left+",top=40,resizable=yes");
@@ -9285,32 +9297,97 @@ const FIREBASE_CONFIG = {
 
 
 
+
 /* ---- Desktop chat popout mode ---- */
 (function(){
-  var qs = new URLSearchParams(location.search || "");
-  if (qs.get("popout") !== "1") return;
-  var liveId = (qs.get("liveId") || "").replace(/[^a-zA-Z0-9_\-]/g, "");
-  window.__GO_LIVE_POPOUT = true;
-  var page = "";
-  page += "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Live Chat</title>";
-  page += "<script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js'><\/script>";
-  page += "<script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js'><\/script>";
-  page += "<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0b0b0f;color:#fff;font-family:Segoe UI,Roboto,sans-serif;height:100vh;display:flex;flex-direction:column;padding:12px}.h{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:8px}#lines{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px}.line{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word}.line .n{font-weight:700;margin-right:6px}.line.gift{color:#ffd60a}.st{font-size:12px;color:#30d158;margin-bottom:6px}</style></head><body>";
-  page += "<div class='h'>Live chat · drag over your game</div><div class='st' id='st'>Connecting…</div><div id='lines'></div>";
-  page += "<script>";
-  page += "var liveId='" + liveId + "';";
-  page += "var colors=['#ff6b9d','#5ac8fa','#30d158','#ffd60a','#bf5af2','#ff9f0a','#64d2ff','#ff375f'];";
-  page += "function addLine(name,text,gift){var box=document.getElementById('lines');if(!box)return;var el=document.createElement('div');el.className='line'+(gift?' gift':'');var n=document.createElement('span');n.className='n';var s=String(name||'user');var h=0;for(var i=0;i<s.length;i++)h+=s.charCodeAt(i);n.style.color=colors[Math.abs(h)%colors.length];n.textContent=s;el.appendChild(n);el.appendChild(document.createTextNode(' '+String(text||'')));box.appendChild(el);while(box.children.length>18)box.removeChild(box.firstChild);setTimeout(function(){if(el.parentNode){el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el)},300)}},9000);}";
-  page += "window.addEventListener('storage',function(e){if(e.key==='golive_chat_line'&&e.newValue){try{var d=JSON.parse(e.newValue);addLine(d.name,d.text,d.gift);document.getElementById('st').textContent='Live';}catch(x){}}});";
-  page += "window.addEventListener('message',function(e){if(e.data&&e.data.type==='golive-chat'){addLine(e.data.name,e.data.text,e.data.gift);document.getElementById('st').textContent='Live';}});";
-  page += "function start(){try{if(!firebase.apps.length)firebase.initializeApp({apiKey:'AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo',authDomain:'golive-ff5ad.firebaseapp.com',projectId:'golive-ff5ad',databaseURL:'https://golive-ff5ad-default-rtdb.firebaseio.com',appId:'1:994701431927:web:4e7615434facc5b54ae272'});var db=firebase.database();if(!liveId){document.getElementById('st').textContent='No live';return;}document.getElementById('st').textContent='Listening…';db.ref('liveChat/'+liveId).limitToLast(40).on('child_added',function(snap){var m=snap.val();if(!m)return;addLine(m.name||'user',m.text||'',!!m.gift);document.getElementById('st').textContent='Live';});}catch(e){document.getElementById('st').textContent=e.message||'Error';}}";
-  page += "setTimeout(start,500);";
-  page += "<\/script></body></html>";
-  document.open();
-  document.write(page);
-  document.close();
+  if (!window.__GO_LIVE_POPOUT) return;
+  var liveId = window.__GO_LIVE_POPOUT_ID || "";
+  // Wipe full app UI — chat only
+  document.body.innerHTML = ""
+    + "<div style='box-sizing:border-box;margin:0;padding:12px;background:#0b0b0f;color:#fff;font-family:Segoe UI,Roboto,sans-serif;height:100vh;display:flex;flex-direction:column'>"
+    + "<div style='font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:8px'>Live chat · drag over your game</div>"
+    + "<div id='st' style='font-size:12px;color:#30d158;margin-bottom:6px'>Connecting…</div>"
+    + "<div id='lines' style='flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px'></div>"
+    + "</div>";
+  document.body.style.margin = "0";
+  document.body.style.background = "#0b0b0f";
+  document.title = "Live Chat";
+  var colors = ["#ff6b9d","#5ac8fa","#30d158","#ffd60a","#bf5af2","#ff9f0a","#64d2ff","#ff375f"];
+  function addLine(name, text, gift){
+    var box = document.getElementById("lines");
+    if (!box) return;
+    var el = document.createElement("div");
+    el.style.cssText = "background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word" + (gift ? ";color:#ffd60a;border-color:rgba(255,214,10,.4)" : "");
+    var n = document.createElement("span");
+    n.style.fontWeight = "700";
+    n.style.marginRight = "6px";
+    var s = String(name || "user");
+    var h = 0; for (var i = 0; i < s.length; i++) h += s.charCodeAt(i);
+    n.style.color = colors[Math.abs(h) % colors.length];
+    n.textContent = s;
+    el.appendChild(n);
+    el.appendChild(document.createTextNode(" " + String(text || "")));
+    box.appendChild(el);
+    while (box.children.length > 20) box.removeChild(box.firstChild);
+    setTimeout(function(){
+      if (el.parentNode) {
+        el.style.opacity = "0";
+        el.style.transition = "opacity .3s";
+        setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+      }
+    }, 9000);
+  }
+  window.addEventListener("storage", function(e){
+    if (e.key === "golive_chat_line" && e.newValue) {
+      try {
+        var d = JSON.parse(e.newValue);
+        addLine(d.name, d.text, d.gift);
+        document.getElementById("st").textContent = "Live";
+      } catch(x){}
+    }
+  });
+  window.addEventListener("message", function(e){
+    if (e.data && e.data.type === "golive-chat") {
+      addLine(e.data.name, e.data.text, e.data.gift);
+      document.getElementById("st").textContent = "Live";
+    }
+  });
+  function startFb(){
+    try {
+      if (typeof firebase === "undefined") {
+        document.getElementById("st").textContent = "Firebase loading…";
+        setTimeout(startFb, 300);
+        return;
+      }
+      if (!firebase.apps.length) {
+        firebase.initializeApp({
+          apiKey: "AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo",
+          authDomain: "golive-ff5ad.firebaseapp.com",
+          projectId: "golive-ff5ad",
+          databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com",
+          appId: "1:994701431927:web:4e7615434facc5b54ae272"
+        });
+      }
+      var db = firebase.database();
+      if (!liveId) {
+        document.getElementById("st").textContent = "No live id — open from More while live";
+        return;
+      }
+      document.getElementById("st").textContent = "Listening…";
+      db.ref("liveChat/" + liveId).limitToLast(40).on("child_added", function(snap){
+        var m = snap.val();
+        if (!m) return;
+        addLine(m.name || "user", m.text || "", !!m.gift);
+        document.getElementById("st").textContent = "Live";
+      });
+    } catch(e) {
+      document.getElementById("st").textContent = e.message || "Error";
+    }
+  }
+  setTimeout(startFb, 200);
 })();
 /* ---- end popout boot ---- */
+
 
 
 
@@ -9986,6 +10063,7 @@ async function joinRemoteLive(id){
 }
 
 function afterLogin(u, displayName){
+  if (window.__GO_LIVE_POPOUT) return;
   user = {
     name: (displayName || u.displayName || (u.email ? u.email.split("@")[0] : "User")).slice(0, 24),
     uid: u.uid,
@@ -10107,9 +10185,11 @@ function requireFirebase(){
   const _show = typeof show === "function" ? show : null;
 })();
 
+if (!window.__GO_LIVE_POPOUT) {
 wireAdminUnlock();
 initFirebase();
 renderLiveList();
+}
 setInterval(function(){
   if (isHost && currentLiveId) publishLivePresence();
 }, 5000);
