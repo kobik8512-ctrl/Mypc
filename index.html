@@ -10311,6 +10311,15 @@ async function startScreenShare(){
 
     isScreenSharing = true;
     stream = display;
+    // If user hits browser "Stop sharing", end share without turning camera on
+    try {
+      var vt = display.getVideoTracks()[0];
+      if (vt) {
+        vt.onended = function(){
+          if (isScreenSharing) stopScreenShare();
+        };
+      }
+    } catch(e){}
 
     // CRITICAL: do NOT preview the shared screen in the live page —
     // that creates a mirror loop and kills FPS. Show placeholder instead.
@@ -10359,24 +10368,50 @@ async function startScreenShare(){
 async function stopScreenShare(){
   if (!isScreenSharing) return;
   isScreenSharing = false;
-  try { if (window._ssWatch) clearInterval(window._ssWatch); } catch(e){}
+  try { if (window._ssWatch) clearInterval(window._ssWatch); window._ssWatch = null; } catch(e){}
+
+  // Stop only screen video — never auto-start camera or change mic
   try {
-    if (stream) stream.getVideoTracks().forEach(function(tr){ try{tr.stop()}catch(e){} });
+    if (stream) {
+      stream.getVideoTracks().forEach(function(tr){
+        try { tr.onended = null; tr.stop(); } catch(e){}
+      });
+    }
   } catch(e){}
+
+  // Keep live mic tracks only (if any). Do NOT call startCam.
+  var liveAudio = [];
+  try {
+    if (stream) {
+      liveAudio = stream.getAudioTracks().filter(function(tr){ return tr && tr.readyState === "live"; });
+    }
+  } catch(e){}
+  if (liveAudio.length) {
+    stream = new MediaStream(liveAudio);
+  } else {
+    stream = null;
+  }
+
+  camOn = false;
   var v = document.getElementById("local-video");
-  if (v) v.classList.remove("screen-fit");
+  if (v) {
+    try { v.srcObject = null; } catch(e){}
+    v.style.display = "none";
+    v.classList.remove("screen-fit");
+    v.classList.remove("mirror");
+  }
   var vw = document.getElementById("video-wrap");
   if (vw) vw.classList.remove("screen-mode");
   var camOff = document.getElementById("cam-off");
   if (camOff) {
+    camOff.style.display = "flex";
     camOff.innerHTML = '<div class="icon">📷</div><div>Camera off</div>';
   }
   var btn = document.getElementById("btn-screen");
   if (btn) btn.classList.remove("active-screen");
   try { if (fbDb && currentLiveId) fbDb.ref("lives/" + currentLiveId + "/screenShare").set(false); } catch(e){}
-  try { if (typeof startCam === "function") await startCam(); } catch(e){}
-  replaceOutgoingTracks(stream);
-  toast("Camera back");
+  try { replaceOutgoingTracks(stream); } catch(e){}
+  toast("Screen share stopped — camera stays off until you turn it on");
 }
 (function(){
   var b = document.getElementById("btn-screen");
