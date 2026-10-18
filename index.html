@@ -8205,7 +8205,7 @@ function announceJoins(count, names, opts){
   const maxAnn = total <= 10 ? total : (total <= 100 ? 22 : (total <= 1000 ? 32 : 42));
   let shown = 0;
   let chatsDuring = 0;
-  const chatsTarget = 4 + Math.floor(Math.random() * 3);
+  const chatsTarget = total >= 100 ? 18 : (total >= 20 ? 10 : (4 + Math.floor(Math.random() * 3)));
   window._joinWaveActive = true;
   const countPerAnn = maxAnn > 0 ? (targetCount - startCount) / maxAnn : 0;
 
@@ -8265,11 +8265,20 @@ function announceJoins(count, names, opts){
       }
       window._joinWaveActive = false;
       const now = Date.now();
-      chatFirstMsgAt = now + 400 + Math.random() * 500; // short pause after joins, then slow chat ramp
-      chatRampStart = chatFirstMsgAt;
-      chatPhase = "warming";
+      // No dead pause — chat keeps moving right after joins
       chatWarmUntil = 0;
       window._earlyChirpDone = true;
+      if (botCount >= 80) {
+        // Room already busy: skip long ramp, full chat almost immediately
+        chatFirstMsgAt = now;
+        chatRampStart = now - 20000; // treat ramp as already done
+        chatPhase = "normal";
+      } else {
+        chatFirstMsgAt = now + 200;
+        chatRampStart = now;
+        chatPhase = "warming";
+      }
+      try { if (typeof scheduleChat === "function") scheduleChat(); } catch(e){}
       return;
     }
 
@@ -8280,7 +8289,7 @@ function announceJoins(count, names, opts){
       publishCount();
     }
 
-    if (chatsDuring < chatsTarget && Math.random() < 0.2) {
+    if (chatsDuring < chatsTarget && Math.random() < (total >= 100 ? 0.55 : 0.35)) {
       emitSideChat();
       chatsDuring++;
     }
@@ -8814,10 +8823,14 @@ function scheduleChat(){
   const now = Date.now();
   // --- Join wave: keep a light chat drip so donations never look like "chat died" ---
   if (window._joinWaveActive) {
-    if (Math.random() < 0.35) {
-      try { addMsg(nextName(), nextMsg()); } catch(e){}
+    // Keep chat visibly moving while joins paint
+    const n = botCount >= 100 ? (1 + (Math.random() < 0.5 ? 1 : 0)) : 1;
+    if (Math.random() < 0.65) {
+      try {
+        for (let i = 0; i < n; i++) addMsg(nextName(), nextMsg());
+      } catch(e){}
     }
-    chatTimer = setTimeout(scheduleChat, 350 + Math.random() * 250);
+    chatTimer = setTimeout(scheduleChat, 220 + Math.random() * 180);
     return;
   }
   // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
@@ -8837,16 +8850,16 @@ function scheduleChat(){
   }
 
   const f = speedFactor();
-  // Base full-speed delay by bot count
+  // Base full-speed delay by bot count — tuned so 100+ never looks dead
   let base;
-  if (botCount < 5) base = 2200 + Math.random()*2200;
-  else if (botCount < 20) base = 1200 + Math.random()*1200;
-  else if (botCount < 80) base = 700 + Math.random()*600;
-  else if (botCount < 300) base = 350 + Math.random()*300;
-  else if (botCount < 1000) base = 180 + Math.random()*160;
-  else if (botCount < 5000) base = 100 + Math.random()*90;
-  else if (botCount < 20000) base = 65 + Math.random()*50;
-  else base = 45 + Math.random()*35;
+  if (botCount < 5) base = 1800 + Math.random()*1600;
+  else if (botCount < 20) base = 900 + Math.random()*800;
+  else if (botCount < 80) base = 420 + Math.random()*380;
+  else if (botCount < 300) base = 160 + Math.random()*140;
+  else if (botCount < 1000) base = 90 + Math.random()*80;
+  else if (botCount < 5000) base = 55 + Math.random()*50;
+  else if (botCount < 20000) base = 40 + Math.random()*35;
+  else base = 28 + Math.random()*28;
 
   // Message wave: 1 → 2 → 4 → 8 → full (NOT instant after joins)
   let rampMul = 1;
@@ -8882,11 +8895,12 @@ function scheduleChat(){
     }
     if (p >= 1) chatPhase = "normal";
   } else {
-    // full speed multi
-    if (botCount > 40) multi = 1 + (Math.random() < 0.5 ? 1 : 0);
-    if (botCount > 200) multi = 1 + Math.floor(Math.random()*2);
-    if (botCount > 1000) multi = 2 + Math.floor(Math.random()*2);
-    if (botCount > 8000) multi = 2 + Math.floor(Math.random()*3);
+    // full speed multi — chat must feel alive
+    if (botCount > 20) multi = 1 + (Math.random() < 0.55 ? 1 : 0);
+    if (botCount > 80) multi = 2 + Math.floor(Math.random()*2);
+    if (botCount > 300) multi = 3 + Math.floor(Math.random()*2);
+    if (botCount > 1000) multi = 4 + Math.floor(Math.random()*3);
+    if (botCount > 8000) multi = 5 + Math.floor(Math.random()*4);
   }
   if (chatSpeed === "really") multi += 1;
   if (chatSpeed === "ultra") multi += 2;
