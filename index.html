@@ -324,7 +324,7 @@ body.cinema-mode #stream-chat-overlay .sco-line{font-size:.85rem;padding:8px 12p
   <div class="more-label">Tools</div>
   <div class="more-row" id="more-ask">Poll chat</div>
   <div class="more-row admin-only" id="more-phrase">Chat phrase</div>
-  <div class="more-row" id="more-popchat">Pop-out chat (desktop)</div>
+  <div class="more-row" id="more-popchat">Chat overlay (corner only)</div>
   <div class="more-row admin-only" id="more-bots">Add viewers</div>
   <div class="more-row admin-only" id="more-speed">Chat speed</div>
 </div>
@@ -8578,17 +8578,17 @@ function pumpScVoice(){
 function speakSuperChat(name, amount, text){
   try {
     if (!window.speechSynthesis) return;
-    // Under heavy bot load, skip voice so chat/UI never freezes
     const b = Math.max(0, Math.floor(Number(botCount)||0));
-    if (b >= 50000 && scVoiceBusy) return;
-    if (b >= 200000 && scVoiceQueue.length >= 1) return;
+    // Mobile + big rooms: TTS freezes the whole page — skip it
+    if (b >= 1000) return;
+    if (scVoiceBusy && scVoiceQueue.length >= 1) return;
     const who = speakable(name);
     const msg = speakable(text || "");
     const line = who + " donated " + formatUSD(amount) + " through super chat. " + msg;
     scVoiceQueue.push(line);
-    const cap = b >= 100000 ? 2 : 6;
-    while (scVoiceQueue.length > cap) scVoiceQueue.shift();
-    pumpScVoice();
+    while (scVoiceQueue.length > 2) scVoiceQueue.shift();
+    // Defer so donation frame never blocks chat timers
+    setTimeout(function(){ try { pumpScVoice(); } catch(e){} }, 0);
   } catch(e){}
 }
 function showSuperChat(name, amount, text, tone, opt){
@@ -8616,13 +8616,21 @@ function showSuperChat(name, amount, text, tone, opt){
   } else {
     addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true, { priority: true });
   }
-  // Voice for everyone
-  if (typeof speakSuperChat === "function") speakSuperChat(name, amount, text);
+  // Voice deferred / skipped under load (see speakSuperChat)
+  if (typeof speakSuperChat === "function") {
+    setTimeout(function(){ try { speakSuperChat(name, amount, text); } catch(e){} }, 0);
+  }
   // Coins only for host on local bot SC (admin stream practice) — real gifts credited in subscribeGifts
   if (isHost && !opt.remote && !opt.noCoins) {
     coins += Math.round((Number(amount)||0) * 10);
     saveCoins(); updateCoinsUI();
   }
+  // CRITICAL: donation must never kill the chat loop
+  try {
+    if (isHost && currentLiveId && typeof scheduleChat === "function") {
+      if (!chatTimer) scheduleChat();
+    }
+  } catch(e){}
 }
 function scAvgMs(b){
   b = Math.max(1, b);
@@ -8645,7 +8653,7 @@ function fireOneSuperChat(){
   const name = nextName();
   const amount = pickScAmount();
   if (typeof shouldShowGift === "function") {
-    shouldShowGift({ from: name, cost: amount, name: "Super Chat", super: true, t: Date.now() });
+    try { shouldShowGift({ from: name, cost: amount, name: "Super Chat", super: true, t: Date.now() }); } catch(e){}
   }
   const r = Math.random();
   let tone = "any";
@@ -8654,9 +8662,10 @@ function fireOneSuperChat(){
   else if (r < 0.62) tone = "funny";
   else if (r < 0.75) tone = "bug";
   const text = pickScText(tone);
-  showSuperChat(name, amount, text, tone);
-  // sync SC to all viewers
-  if (fbReady && fbDb) {
+  try { showSuperChat(name, amount, text, tone); } catch(e){}
+  // Firebase off the hot path
+  setTimeout(function(){
+    if (!fbReady || !fbDb || !currentLiveId) return;
     try {
       fbDb.ref("liveGifts/" + currentLiveId).push({
         emoji: "💬", name: "Super Chat", cost: amount,
@@ -8664,7 +8673,9 @@ function fireOneSuperChat(){
         uid: null, t: Date.now(), bot: true
       });
     } catch(e){}
-  }
+  }, 0);
+  // Keep chat alive after SC
+  try { if (!chatTimer && typeof scheduleChat === "function") scheduleChat(); } catch(e){}
 }
 function scheduleSuperChat(forceReschedule){
   clearTimeout(scTimer); scTimer = null;
@@ -8801,9 +8812,12 @@ function scheduleChat(){
     return;
   }
   const now = Date.now();
-  // --- Join wave in progress: only joins + 4–6 side chats (from announceJoins) ---
+  // --- Join wave: keep a light chat drip so donations never look like "chat died" ---
   if (window._joinWaveActive) {
-    chatTimer = setTimeout(scheduleChat, 400);
+    if (Math.random() < 0.35) {
+      try { addMsg(nextName(), nextMsg()); } catch(e){}
+    }
+    chatTimer = setTimeout(scheduleChat, 350 + Math.random() * 250);
     return;
   }
   // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
@@ -9167,7 +9181,7 @@ function openChatPopout(){
   }
   chatPopoutWin = pop;
   window._chatPopout = pop;
-  toast("Chat window opened — messages load from live · drag over game");
+  toast("Chat-only window opened — place it in the corner over your game");
 }
 
 (function(){
@@ -9366,97 +9380,119 @@ const FIREBASE_CONFIG = {
 
 
 
-/* ---- Desktop chat popout mode ---- */
+/* ---- Chat-only overlay (popout) — no website chrome ---- */
 (function(){
   if (!window.__GO_LIVE_POPOUT) return;
   var liveId = window.__GO_LIVE_POPOUT_ID || "";
-  // Wipe full app UI — chat only
-  document.body.innerHTML = ""
-    + "<div style='box-sizing:border-box;margin:0;padding:12px;background:#0b0b0f;color:#fff;font-family:Segoe UI,Roboto,sans-serif;height:100vh;display:flex;flex-direction:column'>"
-    + "<div style='font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:8px'>Live chat · drag over your game</div>"
-    + "<div id='st' style='font-size:12px;color:#30d158;margin-bottom:6px'>Connecting…</div>"
-    + "<div id='lines' style='flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px'></div>"
-    + "</div>";
-  document.body.style.margin = "0";
-  document.body.style.background = "#0b0b0f";
-  document.title = "Live Chat";
+  document.title = "Chat";
+  document.documentElement.style.cssText = "background:transparent!important;height:100%;";
+  document.body.style.cssText = "margin:0;padding:0;background:transparent!important;overflow:hidden;height:100%;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;";
+
+  // Glass chat only — no Go Live UI, no buttons, no website
+  document.body.innerHTML =
+    '<div id="ov" style="box-sizing:border-box;height:100vh;height:100dvh;display:flex;flex-direction:column;justify-content:flex-end;padding:10px 10px 14px;background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(0,0,0,.35) 40%,rgba(0,0,0,.55) 100%);">'
+    + '<div id="st" style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:8px;text-align:right;padding-right:4px;">…</div>'
+    + '<div id="lines" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px;max-height:100%;overflow:hidden;pointer-events:none;"></div>'
+    + '</div>';
+
   var colors = ["#ff6b9d","#5ac8fa","#30d158","#ffd60a","#bf5af2","#ff9f0a","#64d2ff","#ff375f"];
-  function addLine(name, text, gift){
+  function colorFor(name){
+    var s = String(name||"");
+    var h = 0;
+    for (var i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))>>>0;
+    return colors[h % colors.length];
+  }
+  function addLine(name, text, gift, join){
     var box = document.getElementById("lines");
     if (!box) return;
     var el = document.createElement("div");
-    el.style.cssText = "background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word" + (gift ? ";color:#ffd60a;border-color:rgba(255,214,10,.4)" : "");
+    el.style.cssText = "align-self:flex-end;max-width:100%;background:rgba(0,0,0,.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:7px 10px;font-size:13px;line-height:1.35;word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.25)";
+    if (gift) el.style.borderColor = "rgba(255,214,10,.45)";
+    if (join) el.style.borderColor = "rgba(48,209,88,.4)";
     var n = document.createElement("span");
     n.style.fontWeight = "700";
     n.style.marginRight = "6px";
-    var s = String(name || "user");
-    var h = 0; for (var i = 0; i < s.length; i++) h += s.charCodeAt(i);
-    n.style.color = colors[Math.abs(h) % colors.length];
-    n.textContent = s;
+    n.style.color = gift ? "#ffd60a" : (join ? "#30d158" : colorFor(name));
+    n.textContent = name || "user";
+    var body = document.createElement("span");
+    body.style.color = "rgba(255,255,255,.92)";
+    body.textContent = text || "";
     el.appendChild(n);
-    el.appendChild(document.createTextNode(" " + String(text || "")));
+    el.appendChild(body);
     box.appendChild(el);
-    while (box.children.length > 20) box.removeChild(box.firstChild);
-    setTimeout(function(){
-      if (el.parentNode) {
-        el.style.opacity = "0";
-        el.style.transition = "opacity .3s";
-        setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 300);
-      }
-    }, 9000);
+    while (box.children.length > 18) box.removeChild(box.firstChild);
   }
-  window.addEventListener("storage", function(e){
-    if (e.key === "golive_chat_line" && e.newValue) {
-      try {
-        var d = JSON.parse(e.newValue);
-        addLine(d.name, d.text, d.gift);
-        document.getElementById("st").textContent = "Live";
-      } catch(x){}
-    }
+
+  // Live updates via postMessage from main window
+  window.addEventListener("message", function(ev){
+    var d = ev && ev.data;
+    if (!d || d.type !== "golive-chat") return;
+    addLine(d.name, d.text, !!d.gift, !!d.join);
+    var st = document.getElementById("st");
+    if (st) st.textContent = "";
   });
-  window.addEventListener("message", function(e){
-    if (e.data && e.data.type === "golive-chat") {
-      addLine(e.data.name, e.data.text, e.data.gift);
-      document.getElementById("st").textContent = "Live";
-    }
-  });
+
+  // localStorage fallback (same browser / same phone)
+  var lastT = 0;
+  setInterval(function(){
+    try {
+      var raw = localStorage.getItem("golive_chat_line");
+      if (!raw) return;
+      var row = JSON.parse(raw);
+      if (!row || !row.t || row.t <= lastT) return;
+      lastT = row.t;
+      addLine(row.name, row.text, !!row.gift, !!row.join);
+      var st = document.getElementById("st");
+      if (st) st.textContent = "";
+    } catch(e){}
+  }, 200);
+
+  // Firebase when liveId present (other device / real stream)
   function startFb(){
     try {
       if (typeof firebase === "undefined") {
-        document.getElementById("st").textContent = "Firebase loading…";
-        setTimeout(startFb, 300);
+        // script may still be loading
+        if (document.querySelector('script[src*="firebase"]')) {
+          setTimeout(startFb, 300);
+          return;
+        }
+        var st = document.getElementById("st");
+        if (st && liveId) st.textContent = "Chat only · same phone uses auto sync";
         return;
       }
-      if (!firebase.apps.length) {
+      if (!firebase.apps || !firebase.apps.length) {
         firebase.initializeApp({
           apiKey: "AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo",
           authDomain: "golive-ff5ad.firebaseapp.com",
           projectId: "golive-ff5ad",
-          databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com",
-          appId: "1:994701431927:web:4e7615434facc5b54ae272"
+          storageBucket: "golive-ff5ad.firebasestorage.app",
+          messagingSenderId: "994701431927",
+          appId: "1:994701431927:web:4e7615434facc5b54ae272",
+          databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com"
         });
       }
       var db = firebase.database();
       if (!liveId) {
-        document.getElementById("st").textContent = "No live id — open from More while live";
+        document.getElementById("st").textContent = "Open from More → Pop-out chat while live";
         return;
       }
-      document.getElementById("st").textContent = "Listening…";
+      document.getElementById("st").textContent = "Live";
       var _seen = {};
-      db.ref("liveChat/" + liveId).limitToLast(30).on("child_added", function(snap){
+      db.ref("liveChat/" + liveId).limitToLast(25).on("child_added", function(snap){
         var key = snap.key;
         if (!key || _seen[key]) return;
         _seen[key] = true;
         var m = snap.val();
         if (!m) return;
-        addLine(m.name || "user", m.text || "", !!m.gift);
-        document.getElementById("st").textContent = "Live";
+        addLine(m.name || "user", m.text || "", !!m.gift, !!m.join);
+        document.getElementById("st").textContent = "";
       });
     } catch(e) {
-      document.getElementById("st").textContent = e.message || "Error";
+      var st = document.getElementById("st");
+      if (st) st.textContent = (e && e.message) || "Error";
     }
   }
-  setTimeout(startFb, 200);
+  setTimeout(startFb, 250);
 })();
 /* ---- end popout boot ---- */
 
