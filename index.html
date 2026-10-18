@@ -7183,9 +7183,25 @@ function colorClass(n){let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i
 function format(n){n=Number(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1000)return(n/1000).toFixed(1)+"K";return String(Math.floor(n))}
 function formatCoins(n){return format(n)}
 function hostCut(cost){return Math.round((Number(cost)||0)*0.7)}
-function saveCoins(){try{localStorage.setItem("gl_offline_coins",String(Math.floor(coins||0)))}catch(e){}}
+let _coinsSaveTimer=null,_coinsUITimer=null;
+function saveCoins(){
+  if (_coinsSaveTimer) return;
+  _coinsSaveTimer = setTimeout(function(){
+    _coinsSaveTimer = null;
+    try{localStorage.setItem("gl_offline_coins",String(Math.floor(coins||0)))}catch(e){}
+  }, 400);
+}
+
 function loadCoins(){try{coins=Math.max(0,Number(localStorage.getItem("gl_offline_coins")||0)||0)}catch(e){coins=0}}
-function updateCoinsUI(){const el=document.getElementById("coins-count");if(el)el.textContent=formatCoins(coins)}
+function updateCoinsUI(){
+  if (_coinsUITimer) return;
+  _coinsUITimer = setTimeout(function(){
+    _coinsUITimer = null;
+    const el=document.getElementById("coins-count");
+    if(el)el.textContent=formatCoins(coins);
+  }, 120);
+}
+
 function updateLikesUI(){const el=document.getElementById("likes-count");if(el)el.textContent=format(likeCount)}
 function updateCount(){const total=Math.floor(Number(botCount)+Number(realViewers))||0;document.getElementById("watchers-text").textContent=format(total)+" watching"; if(typeof publishLivePresence==="function"&&isHost) publishLivePresence();}
 
@@ -8562,13 +8578,16 @@ function pumpScVoice(){
 function speakSuperChat(name, amount, text){
   try {
     if (!window.speechSynthesis) return;
-    // DO NOT cancel — queue so previous SC finishes reading
+    // Under heavy bot load, skip voice so chat/UI never freezes
+    const b = Math.max(0, Math.floor(Number(botCount)||0));
+    if (b >= 50000 && scVoiceBusy) return;
+    if (b >= 200000 && scVoiceQueue.length >= 1) return;
     const who = speakable(name);
     const msg = speakable(text || "");
     const line = who + " donated " + formatUSD(amount) + " through super chat. " + msg;
     scVoiceQueue.push(line);
-    // hard cap queue so it doesn't backlog forever
-    while (scVoiceQueue.length > 6) scVoiceQueue.shift();
+    const cap = b >= 100000 ? 2 : 6;
+    while (scVoiceQueue.length > cap) scVoiceQueue.shift();
     pumpScVoice();
   } catch(e){}
 }
@@ -8591,11 +8610,11 @@ function showSuperChat(name, amount, text, tone, opt){
     chatQueue.push({
       name: name,
       text: " Super Chat "+formatUSD(amount)+": "+text,
-      host: false, gift: true, _remote: true
+      host: false, gift: true, priority: true, _remote: true
     });
     scheduleChatRender();
   } else {
-    addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true);
+    addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true, { priority: true });
   }
   // Voice for everyone
   if (typeof speakSuperChat === "function") speakSuperChat(name, amount, text);
@@ -8963,11 +8982,29 @@ function flushChatQueue(){
   if (chatSpeed === "ultra") maxBatch = 28;
   if (chatQueue.length > 20) maxBatch = Math.max(maxBatch, 20);
   if (chatQueue.length > 50) maxBatch = Math.max(maxBatch, 30);
-  // During join wave or if next items are joins, paint 1–2 max so it looks real
-  const joinHeavy = window._joinWaveActive || (chatQueue[0] && chatQueue[0].join);
-  if (joinHeavy) maxBatch = 1;
 
-  const batch = chatQueue.splice(0, Math.min(maxBatch, chatQueue.length));
+  // FIX: gifts / normal chat must NOT freeze behind join spam.
+  // Pull priority messages (gift, host, superchat) to the front of this frame.
+  for (let i = 1; i < chatQueue.length && i < 40; i++) {
+    const m = chatQueue[i];
+    if (m && (m.gift || m.host || m.priority)) {
+      chatQueue.splice(i, 1);
+      chatQueue.unshift(m);
+    }
+  }
+
+  // Only throttle consecutive JOINS — never lock the whole queue to 1/frame
+  let maxJoins = window._joinWaveActive ? 1 : 3;
+  const batch = [];
+  let joinsInBatch = 0;
+  while (batch.length < maxBatch && chatQueue.length) {
+    const next = chatQueue[0];
+    if (next && next.join) {
+      if (joinsInBatch >= maxJoins) break;
+      joinsInBatch++;
+    }
+    batch.push(chatQueue.shift());
+  }
   const frag = document.createDocumentFragment();
   const noAnim = fast || batch.length > 8;
 
@@ -9200,8 +9237,8 @@ function scheduleBotDonation(){
   else if (b < 1000) delay = 1600 + Math.random()*1600;
   else if (b < 5000) delay = 900 + Math.random()*900;
   else if (b < 50000) delay = 400 + Math.random()*400;
-  else if (b < 500000) delay = 220 + Math.random()*220;
-  else delay = 120 + Math.random()*150; // millions — gifts often
+  else if (b < 500000) delay = 280 + Math.random()*320; // was too aggressive — froze UI
+  else delay = 200 + Math.random()*250; // millions — still frequent, never locks thread
   botGiftTimer = setTimeout(function(){
     botGiftTimer = null;
     if (!isHost || !currentLiveId || botCount <= 0) { scheduleBotDonation(); return; }
@@ -9210,20 +9247,25 @@ function scheduleBotDonation(){
       if (gift) {
         const from = nextName();
         const toStreamer = hostCut(gift.cost);
-        playGiftAnim(gift.emoji, gift.name, gift.cost, from);
-        coins += toStreamer; saveCoins(); updateCoinsUI();
-        addMsg(from, "sent " + gift.emoji + " " + gift.name + " (🪙" + formatCoins(gift.cost) + ")", false, true, {
-          giftEmoji: gift.emoji, giftName: gift.name, giftCost: gift.cost
-        });
-        if (fbReady && fbDb && currentLiveId) {
+        // Defer heavy DOM so chat never hard-locks on donation frame
+        requestAnimationFrame(function(){
           try {
-            fbDb.ref("liveGifts/" + currentLiveId).push({
-              emoji: gift.emoji, name: gift.name, cost: gift.cost,
-              from: from, uid: null, t: Date.now(), bot: true
+            playGiftAnim(gift.emoji, gift.name, gift.cost, from);
+            coins += toStreamer; saveCoins(); updateCoinsUI();
+            addMsg(from, "sent " + gift.emoji + " " + gift.name + " (🪙" + formatCoins(gift.cost) + ")", false, true, {
+              giftEmoji: gift.emoji, giftName: gift.name, giftCost: gift.cost, priority: true
             });
+            if (fbReady && fbDb && currentLiveId) {
+              try {
+                fbDb.ref("liveGifts/" + currentLiveId).push({
+                  emoji: gift.emoji, name: gift.name, cost: gift.cost,
+                  from: from, uid: null, t: Date.now(), bot: true
+                });
+              } catch(e){}
+            }
+            if (Math.random() < 0.35) addMsg(nextName(), rand(T_GIFT));
           } catch(e){}
-        }
-        if (Math.random() < 0.4) addMsg(nextName(), rand(T_GIFT));
+        });
       }
     }
     scheduleBotDonation();
