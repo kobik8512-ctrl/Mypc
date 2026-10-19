@@ -7187,7 +7187,20 @@ function saveCoins(){try{localStorage.setItem("gl_offline_coins",String(Math.flo
 function loadCoins(){try{coins=Math.max(0,Number(localStorage.getItem("gl_offline_coins")||0)||0)}catch(e){coins=0}}
 function updateCoinsUI(){const el=document.getElementById("coins-count");if(el)el.textContent=formatCoins(coins)}
 function updateLikesUI(){const el=document.getElementById("likes-count");if(el)el.textContent=format(likeCount)}
-function updateCount(){const total=Math.floor(Number(botCount)+Number(realViewers))||0;document.getElementById("watchers-text").textContent=format(total)+" watching"; if(typeof publishLivePresence==="function"&&isHost) publishLivePresence();}
+let _pubCountTimer = null;
+function updateCount(){
+  const total = Math.floor(Number(botCount) + Number(realViewers)) || 0;
+  const el = document.getElementById("watchers-text");
+  if (el) el.textContent = format(total) + " watching";
+  // Debounce presence writes so Instant 100K doesn't spam / race FB
+  if (typeof publishLivePresence === "function" && isHost) {
+    if (_pubCountTimer) return;
+    _pubCountTimer = setTimeout(function(){
+      _pubCountTimer = null;
+      try { publishLivePresence(); } catch(e){}
+    }, 350);
+  }
+}
 
 /* ---------- AUTH (local only) ---------- */
 loadCoins();
@@ -7245,23 +7258,31 @@ document.getElementById("btn-start").onclick = async function(){
 function subscribeHostBotCount(liveId){
   if (!fbReady || !fbDb || !liveId || !isHost) return;
   fbDb.ref("lives/" + liveId + "/bots").on("value", function(snap){
-    const v = Number(snap.val()) || 0;
+    const v = Math.max(0, Math.floor(Number(snap.val()) || 0));
     const prev = botCount;
-    botCount = v;
-    updateCount();
-    // Host keeps bots running even after admin leaves
-    if (v > 0) {
-      if (!chatTimer) startBots();
+    // Admin host owns the count locally — never let FB echo wipe / shrink it mid-wave
+    if (isAdmin) {
+      if (v > botCount) {
+        botCount = v;
+        updateCount();
+      }
+      // keep chat alive; never restart warmup from FB echo
+      if (botCount > 0 && !chatTimer && typeof scheduleChat === "function") {
+        try { scheduleChat(); } catch(e){}
+      }
     } else {
-      stopBots();
+      botCount = v;
+      updateCount();
+      if (v > 0) {
+        if (!chatTimer) startBots();
+      } else {
+        stopBots();
+      }
     }
-    // Chat speed from admin
-    // (also subscribed below)
-    if (v > 0 && pollState && !pollState.done && !pollState._remote) {
-      if (prev <= 0) schedulePollVotes();
+    if (botCount > 0 && pollState && !pollState.done && !pollState._remote) {
+      if (prev <= 0 && typeof schedulePollVotes === "function") schedulePollVotes();
     }
   });
-  // Listen chat speed remote control
   fbDb.ref("lives/" + liveId + "/chatSpeed").on("value", function(snap){
     const spd = snap.val();
     if (spd && typeof spd === "string") {
@@ -8249,11 +8270,16 @@ function announceJoins(count, names, opts){
       }
       window._joinWaveActive = false;
       const now = Date.now();
-      chatFirstMsgAt = now + 400 + Math.random() * 500; // short pause after joins, then slow chat ramp
-      chatRampStart = chatFirstMsgAt;
-      chatPhase = "warming";
       chatWarmUntil = 0;
       window._earlyChirpDone = true;
+      // Instant full chat after join paint — matches old "alive" feel
+      chatFirstMsgAt = now;
+      chatRampStart = now - 30000;
+      chatPhase = "normal";
+      try {
+        if (!chatTimer && typeof scheduleChat === "function") scheduleChat();
+        else if (typeof scheduleChat === "function") scheduleChat();
+      } catch(e){}
       return;
     }
 
@@ -8294,14 +8320,22 @@ async function addBotsBatch(n){
   }
 
   if (isHost) {
+    // Mark count as authoritative so FB listener cannot shrink it
+    window._botsLocalAuthority = true;
     if (!chatTimer) {
       startBots();
     } else {
-      clearTimeout(chatTimer); chatTimer = null;
-      scheduleChat();
+      // Keep chat alive — do not full-stop
+      try { scheduleChat(); } catch(e){}
       clearTimeout(scTimer); scTimer = null;
-      scheduleSuperChat(true);
+      try { scheduleSuperChat(true); } catch(e){}
     }
+    // Ensure timers not stuck after bulk add
+    chatWarmUntil = 0;
+    window._earlyChirpDone = true;
+    chatFirstMsgAt = Date.now();
+    chatRampStart = Date.now() - 30000;
+    chatPhase = "normal";
     announceJoins(n, null, {
       waveCount: mode === "wave",
       startCount: startCount,
@@ -8682,33 +8716,36 @@ function startBots(){
   // Anyone hosting can RUN bots once they exist. Only admin can ADD bots (addBotsBatch).
   if (!isHost || !currentLiveId) return;
   if (botCount <= 0) return;
+  // If chat already running, just keep it — do NOT reset silence
+  if (chatTimer) {
+    try { scheduleBotDonation(); } catch(e){}
+    try { scheduleSuperChat(false); } catch(e){}
+    return;
+  }
   stopBots();
   scFirst = true;
-  // Warmup: 0–6s silent (joins only), first chat randomly 7–30s, then ramp to full
   const now = Date.now();
-  chatWarmUntil = now + 6000; // quiet period (with 1–2 early chirps at 3–5s)
-  window._earlyChirpDone = false;
-  // first real message between 7–30s
-  const firstGap = 7000 + Math.random() * 23000;
-  chatFirstMsgAt = now + firstGap;
-  // gifts start slow wave at 15–20s
-  giftWarmUntil = now + 15000 + Math.random() * 5000;
-  window._giftWaveStarted = false;
-  // ramp finishes ~8–20s after first msg (faster if many bots)
-  let rampLen = 18000;
-  if (botCount >= 1000) rampLen = 14000;
-  if (botCount >= 100000) rampLen = 10000;
-  if (botCount >= 1000000) rampLen = 8000;
-  if (botCount < 20) rampLen = 22000;
-  chatRampStart = chatFirstMsgAt;
-  chatPhase = "silent";
-  clearTimeout(phaseTimer);
-  phaseTimer = setTimeout(function(){
+  // Short warm only for tiny rooms; admin bulk-add jumps straight into chat
+  if (botCount >= 50) {
+    chatWarmUntil = 0;
+    window._earlyChirpDone = true;
+    chatFirstMsgAt = now;
+    chatRampStart = now - 30000;
+    chatPhase = "normal";
+    giftWarmUntil = now + 8000 + Math.random() * 4000;
+  } else {
+    chatWarmUntil = now + 4000;
+    window._earlyChirpDone = false;
+    chatFirstMsgAt = now + 4000 + Math.random() * 4000;
+    chatRampStart = chatFirstMsgAt;
     chatPhase = "warming";
-  }, Math.max(0, chatFirstMsgAt - Date.now()));
-  setTimeout(function(){ chatPhase = "normal"; }, Math.max(0, chatFirstMsgAt + rampLen - Date.now()));
-  // Don't auto grow bots for non-admin hosts
-  if (isAdmin) botTimer = setTimeout(scheduleJoin, 3500);
+    giftWarmUntil = now + 12000 + Math.random() * 5000;
+  }
+  window._giftWaveStarted = false;
+  clearTimeout(phaseTimer);
+  phaseTimer = setTimeout(function(){ chatPhase = "normal"; }, 50);
+  // Auto-grow only for admin and only when not in a manual join wave
+  if (isAdmin) botTimer = setTimeout(scheduleJoin, 4000);
   scheduleChat(); scheduleLeave(); scheduleBotDonation(); scheduleSuperChat(false);
 }
 function stopBots(){
@@ -8782,9 +8819,12 @@ function scheduleChat(){
     return;
   }
   const now = Date.now();
-  // --- Join wave in progress: only joins + 4–6 side chats (from announceJoins) ---
+  // --- Join wave: still drip chat so admin stream never looks frozen ---
   if (window._joinWaveActive) {
-    chatTimer = setTimeout(scheduleChat, 400);
+    if (Math.random() < 0.5) {
+      try { addMsg(nextName(), nextMsg()); } catch(e){}
+    }
+    chatTimer = setTimeout(scheduleChat, 280 + Math.random() * 200);
     return;
   }
   // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
