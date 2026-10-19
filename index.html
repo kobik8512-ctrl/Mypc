@@ -324,7 +324,7 @@ body.cinema-mode #stream-chat-overlay .sco-line{font-size:.85rem;padding:8px 12p
   <div class="more-label">Tools</div>
   <div class="more-row" id="more-ask">Poll chat</div>
   <div class="more-row admin-only" id="more-phrase">Chat phrase</div>
-  <div class="more-row" id="more-popchat">Chat overlay (corner only)</div>
+  <div class="more-row" id="more-popchat">Pop-out chat (desktop)</div>
   <div class="more-row admin-only" id="more-bots">Add viewers</div>
   <div class="more-row admin-only" id="more-speed">Chat speed</div>
 </div>
@@ -7183,25 +7183,9 @@ function colorClass(n){let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i
 function format(n){n=Number(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1000)return(n/1000).toFixed(1)+"K";return String(Math.floor(n))}
 function formatCoins(n){return format(n)}
 function hostCut(cost){return Math.round((Number(cost)||0)*0.7)}
-let _coinsSaveTimer=null,_coinsUITimer=null;
-function saveCoins(){
-  if (_coinsSaveTimer) return;
-  _coinsSaveTimer = setTimeout(function(){
-    _coinsSaveTimer = null;
-    try{localStorage.setItem("gl_offline_coins",String(Math.floor(coins||0)))}catch(e){}
-  }, 400);
-}
-
+function saveCoins(){try{localStorage.setItem("gl_offline_coins",String(Math.floor(coins||0)))}catch(e){}}
 function loadCoins(){try{coins=Math.max(0,Number(localStorage.getItem("gl_offline_coins")||0)||0)}catch(e){coins=0}}
-function updateCoinsUI(){
-  if (_coinsUITimer) return;
-  _coinsUITimer = setTimeout(function(){
-    _coinsUITimer = null;
-    const el=document.getElementById("coins-count");
-    if(el)el.textContent=formatCoins(coins);
-  }, 120);
-}
-
+function updateCoinsUI(){const el=document.getElementById("coins-count");if(el)el.textContent=formatCoins(coins)}
 function updateLikesUI(){const el=document.getElementById("likes-count");if(el)el.textContent=format(likeCount)}
 function updateCount(){const total=Math.floor(Number(botCount)+Number(realViewers))||0;document.getElementById("watchers-text").textContent=format(total)+" watching"; if(typeof publishLivePresence==="function"&&isHost) publishLivePresence();}
 
@@ -8205,7 +8189,7 @@ function announceJoins(count, names, opts){
   const maxAnn = total <= 10 ? total : (total <= 100 ? 22 : (total <= 1000 ? 32 : 42));
   let shown = 0;
   let chatsDuring = 0;
-  const chatsTarget = total >= 100 ? 18 : (total >= 20 ? 10 : (4 + Math.floor(Math.random() * 3)));
+  const chatsTarget = 4 + Math.floor(Math.random() * 3);
   window._joinWaveActive = true;
   const countPerAnn = maxAnn > 0 ? (targetCount - startCount) / maxAnn : 0;
 
@@ -8265,20 +8249,11 @@ function announceJoins(count, names, opts){
       }
       window._joinWaveActive = false;
       const now = Date.now();
-      // No dead pause — chat keeps moving right after joins
+      chatFirstMsgAt = now + 400 + Math.random() * 500; // short pause after joins, then slow chat ramp
+      chatRampStart = chatFirstMsgAt;
+      chatPhase = "warming";
       chatWarmUntil = 0;
       window._earlyChirpDone = true;
-      if (botCount >= 80) {
-        // Room already busy: skip long ramp, full chat almost immediately
-        chatFirstMsgAt = now;
-        chatRampStart = now - 20000; // treat ramp as already done
-        chatPhase = "normal";
-      } else {
-        chatFirstMsgAt = now + 200;
-        chatRampStart = now;
-        chatPhase = "warming";
-      }
-      try { if (typeof scheduleChat === "function") scheduleChat(); } catch(e){}
       return;
     }
 
@@ -8289,7 +8264,7 @@ function announceJoins(count, names, opts){
       publishCount();
     }
 
-    if (chatsDuring < chatsTarget && Math.random() < (total >= 100 ? 0.55 : 0.35)) {
+    if (chatsDuring < chatsTarget && Math.random() < 0.2) {
       emitSideChat();
       chatsDuring++;
     }
@@ -8587,17 +8562,14 @@ function pumpScVoice(){
 function speakSuperChat(name, amount, text){
   try {
     if (!window.speechSynthesis) return;
-    const b = Math.max(0, Math.floor(Number(botCount)||0));
-    // Mobile + big rooms: TTS freezes the whole page — skip it
-    if (b >= 1000) return;
-    if (scVoiceBusy && scVoiceQueue.length >= 1) return;
+    // DO NOT cancel — queue so previous SC finishes reading
     const who = speakable(name);
     const msg = speakable(text || "");
     const line = who + " donated " + formatUSD(amount) + " through super chat. " + msg;
     scVoiceQueue.push(line);
-    while (scVoiceQueue.length > 2) scVoiceQueue.shift();
-    // Defer so donation frame never blocks chat timers
-    setTimeout(function(){ try { pumpScVoice(); } catch(e){} }, 0);
+    // hard cap queue so it doesn't backlog forever
+    while (scVoiceQueue.length > 6) scVoiceQueue.shift();
+    pumpScVoice();
   } catch(e){}
 }
 function showSuperChat(name, amount, text, tone, opt){
@@ -8619,27 +8591,19 @@ function showSuperChat(name, amount, text, tone, opt){
     chatQueue.push({
       name: name,
       text: " Super Chat "+formatUSD(amount)+": "+text,
-      host: false, gift: true, priority: true, _remote: true
+      host: false, gift: true, _remote: true
     });
     scheduleChatRender();
   } else {
-    addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true, { priority: true });
+    addMsg(name, " Super Chat "+formatUSD(amount)+": "+text, false, true);
   }
-  // Voice deferred / skipped under load (see speakSuperChat)
-  if (typeof speakSuperChat === "function") {
-    setTimeout(function(){ try { speakSuperChat(name, amount, text); } catch(e){} }, 0);
-  }
+  // Voice for everyone
+  if (typeof speakSuperChat === "function") speakSuperChat(name, amount, text);
   // Coins only for host on local bot SC (admin stream practice) — real gifts credited in subscribeGifts
   if (isHost && !opt.remote && !opt.noCoins) {
     coins += Math.round((Number(amount)||0) * 10);
     saveCoins(); updateCoinsUI();
   }
-  // CRITICAL: donation must never kill the chat loop
-  try {
-    if (isHost && currentLiveId && typeof scheduleChat === "function") {
-      if (!chatTimer) scheduleChat();
-    }
-  } catch(e){}
 }
 function scAvgMs(b){
   b = Math.max(1, b);
@@ -8662,7 +8626,7 @@ function fireOneSuperChat(){
   const name = nextName();
   const amount = pickScAmount();
   if (typeof shouldShowGift === "function") {
-    try { shouldShowGift({ from: name, cost: amount, name: "Super Chat", super: true, t: Date.now() }); } catch(e){}
+    shouldShowGift({ from: name, cost: amount, name: "Super Chat", super: true, t: Date.now() });
   }
   const r = Math.random();
   let tone = "any";
@@ -8671,10 +8635,9 @@ function fireOneSuperChat(){
   else if (r < 0.62) tone = "funny";
   else if (r < 0.75) tone = "bug";
   const text = pickScText(tone);
-  try { showSuperChat(name, amount, text, tone); } catch(e){}
-  // Firebase off the hot path
-  setTimeout(function(){
-    if (!fbReady || !fbDb || !currentLiveId) return;
+  showSuperChat(name, amount, text, tone);
+  // sync SC to all viewers
+  if (fbReady && fbDb) {
     try {
       fbDb.ref("liveGifts/" + currentLiveId).push({
         emoji: "💬", name: "Super Chat", cost: amount,
@@ -8682,9 +8645,7 @@ function fireOneSuperChat(){
         uid: null, t: Date.now(), bot: true
       });
     } catch(e){}
-  }, 0);
-  // Keep chat alive after SC
-  try { if (!chatTimer && typeof scheduleChat === "function") scheduleChat(); } catch(e){}
+  }
 }
 function scheduleSuperChat(forceReschedule){
   clearTimeout(scTimer); scTimer = null;
@@ -8821,16 +8782,9 @@ function scheduleChat(){
     return;
   }
   const now = Date.now();
-  // --- Join wave: keep a light chat drip so donations never look like "chat died" ---
+  // --- Join wave in progress: only joins + 4–6 side chats (from announceJoins) ---
   if (window._joinWaveActive) {
-    // Keep chat visibly moving while joins paint
-    const n = botCount >= 100 ? (1 + (Math.random() < 0.5 ? 1 : 0)) : 1;
-    if (Math.random() < 0.65) {
-      try {
-        for (let i = 0; i < n; i++) addMsg(nextName(), nextMsg());
-      } catch(e){}
-    }
-    chatTimer = setTimeout(scheduleChat, 220 + Math.random() * 180);
+    chatTimer = setTimeout(scheduleChat, 400);
     return;
   }
   // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
@@ -8850,16 +8804,16 @@ function scheduleChat(){
   }
 
   const f = speedFactor();
-  // Base full-speed delay by bot count — tuned so 100+ never looks dead
+  // Base full-speed delay by bot count
   let base;
-  if (botCount < 5) base = 1800 + Math.random()*1600;
-  else if (botCount < 20) base = 900 + Math.random()*800;
-  else if (botCount < 80) base = 420 + Math.random()*380;
-  else if (botCount < 300) base = 160 + Math.random()*140;
-  else if (botCount < 1000) base = 90 + Math.random()*80;
-  else if (botCount < 5000) base = 55 + Math.random()*50;
-  else if (botCount < 20000) base = 40 + Math.random()*35;
-  else base = 28 + Math.random()*28;
+  if (botCount < 5) base = 2200 + Math.random()*2200;
+  else if (botCount < 20) base = 1200 + Math.random()*1200;
+  else if (botCount < 80) base = 700 + Math.random()*600;
+  else if (botCount < 300) base = 350 + Math.random()*300;
+  else if (botCount < 1000) base = 180 + Math.random()*160;
+  else if (botCount < 5000) base = 100 + Math.random()*90;
+  else if (botCount < 20000) base = 65 + Math.random()*50;
+  else base = 45 + Math.random()*35;
 
   // Message wave: 1 → 2 → 4 → 8 → full (NOT instant after joins)
   let rampMul = 1;
@@ -8895,12 +8849,11 @@ function scheduleChat(){
     }
     if (p >= 1) chatPhase = "normal";
   } else {
-    // full speed multi — chat must feel alive
-    if (botCount > 20) multi = 1 + (Math.random() < 0.55 ? 1 : 0);
-    if (botCount > 80) multi = 2 + Math.floor(Math.random()*2);
-    if (botCount > 300) multi = 3 + Math.floor(Math.random()*2);
-    if (botCount > 1000) multi = 4 + Math.floor(Math.random()*3);
-    if (botCount > 8000) multi = 5 + Math.floor(Math.random()*4);
+    // full speed multi
+    if (botCount > 40) multi = 1 + (Math.random() < 0.5 ? 1 : 0);
+    if (botCount > 200) multi = 1 + Math.floor(Math.random()*2);
+    if (botCount > 1000) multi = 2 + Math.floor(Math.random()*2);
+    if (botCount > 8000) multi = 2 + Math.floor(Math.random()*3);
   }
   if (chatSpeed === "really") multi += 1;
   if (chatSpeed === "ultra") multi += 2;
@@ -9010,29 +8963,11 @@ function flushChatQueue(){
   if (chatSpeed === "ultra") maxBatch = 28;
   if (chatQueue.length > 20) maxBatch = Math.max(maxBatch, 20);
   if (chatQueue.length > 50) maxBatch = Math.max(maxBatch, 30);
+  // During join wave or if next items are joins, paint 1–2 max so it looks real
+  const joinHeavy = window._joinWaveActive || (chatQueue[0] && chatQueue[0].join);
+  if (joinHeavy) maxBatch = 1;
 
-  // FIX: gifts / normal chat must NOT freeze behind join spam.
-  // Pull priority messages (gift, host, superchat) to the front of this frame.
-  for (let i = 1; i < chatQueue.length && i < 40; i++) {
-    const m = chatQueue[i];
-    if (m && (m.gift || m.host || m.priority)) {
-      chatQueue.splice(i, 1);
-      chatQueue.unshift(m);
-    }
-  }
-
-  // Only throttle consecutive JOINS — never lock the whole queue to 1/frame
-  let maxJoins = window._joinWaveActive ? 1 : 3;
-  const batch = [];
-  let joinsInBatch = 0;
-  while (batch.length < maxBatch && chatQueue.length) {
-    const next = chatQueue[0];
-    if (next && next.join) {
-      if (joinsInBatch >= maxJoins) break;
-      joinsInBatch++;
-    }
-    batch.push(chatQueue.shift());
-  }
+  const batch = chatQueue.splice(0, Math.min(maxBatch, chatQueue.length));
   const frag = document.createDocumentFragment();
   const noAnim = fast || batch.length > 8;
 
@@ -9195,7 +9130,7 @@ function openChatPopout(){
   }
   chatPopoutWin = pop;
   window._chatPopout = pop;
-  toast("Chat-only window opened — place it in the corner over your game");
+  toast("Chat window opened — messages load from live · drag over game");
 }
 
 (function(){
@@ -9265,8 +9200,8 @@ function scheduleBotDonation(){
   else if (b < 1000) delay = 1600 + Math.random()*1600;
   else if (b < 5000) delay = 900 + Math.random()*900;
   else if (b < 50000) delay = 400 + Math.random()*400;
-  else if (b < 500000) delay = 280 + Math.random()*320; // was too aggressive — froze UI
-  else delay = 200 + Math.random()*250; // millions — still frequent, never locks thread
+  else if (b < 500000) delay = 220 + Math.random()*220;
+  else delay = 120 + Math.random()*150; // millions — gifts often
   botGiftTimer = setTimeout(function(){
     botGiftTimer = null;
     if (!isHost || !currentLiveId || botCount <= 0) { scheduleBotDonation(); return; }
@@ -9275,25 +9210,20 @@ function scheduleBotDonation(){
       if (gift) {
         const from = nextName();
         const toStreamer = hostCut(gift.cost);
-        // Defer heavy DOM so chat never hard-locks on donation frame
-        requestAnimationFrame(function(){
-          try {
-            playGiftAnim(gift.emoji, gift.name, gift.cost, from);
-            coins += toStreamer; saveCoins(); updateCoinsUI();
-            addMsg(from, "sent " + gift.emoji + " " + gift.name + " (🪙" + formatCoins(gift.cost) + ")", false, true, {
-              giftEmoji: gift.emoji, giftName: gift.name, giftCost: gift.cost, priority: true
-            });
-            if (fbReady && fbDb && currentLiveId) {
-              try {
-                fbDb.ref("liveGifts/" + currentLiveId).push({
-                  emoji: gift.emoji, name: gift.name, cost: gift.cost,
-                  from: from, uid: null, t: Date.now(), bot: true
-                });
-              } catch(e){}
-            }
-            if (Math.random() < 0.35) addMsg(nextName(), rand(T_GIFT));
-          } catch(e){}
+        playGiftAnim(gift.emoji, gift.name, gift.cost, from);
+        coins += toStreamer; saveCoins(); updateCoinsUI();
+        addMsg(from, "sent " + gift.emoji + " " + gift.name + " (🪙" + formatCoins(gift.cost) + ")", false, true, {
+          giftEmoji: gift.emoji, giftName: gift.name, giftCost: gift.cost
         });
+        if (fbReady && fbDb && currentLiveId) {
+          try {
+            fbDb.ref("liveGifts/" + currentLiveId).push({
+              emoji: gift.emoji, name: gift.name, cost: gift.cost,
+              from: from, uid: null, t: Date.now(), bot: true
+            });
+          } catch(e){}
+        }
+        if (Math.random() < 0.4) addMsg(nextName(), rand(T_GIFT));
       }
     }
     scheduleBotDonation();
@@ -9394,119 +9324,97 @@ const FIREBASE_CONFIG = {
 
 
 
-/* ---- Chat-only overlay (popout) — no website chrome ---- */
+/* ---- Desktop chat popout mode ---- */
 (function(){
   if (!window.__GO_LIVE_POPOUT) return;
   var liveId = window.__GO_LIVE_POPOUT_ID || "";
-  document.title = "Chat";
-  document.documentElement.style.cssText = "background:transparent!important;height:100%;";
-  document.body.style.cssText = "margin:0;padding:0;background:transparent!important;overflow:hidden;height:100%;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;";
-
-  // Glass chat only — no Go Live UI, no buttons, no website
-  document.body.innerHTML =
-    '<div id="ov" style="box-sizing:border-box;height:100vh;height:100dvh;display:flex;flex-direction:column;justify-content:flex-end;padding:10px 10px 14px;background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(0,0,0,.35) 40%,rgba(0,0,0,.55) 100%);">'
-    + '<div id="st" style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:8px;text-align:right;padding-right:4px;">…</div>'
-    + '<div id="lines" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px;max-height:100%;overflow:hidden;pointer-events:none;"></div>'
-    + '</div>';
-
+  // Wipe full app UI — chat only
+  document.body.innerHTML = ""
+    + "<div style='box-sizing:border-box;margin:0;padding:12px;background:#0b0b0f;color:#fff;font-family:Segoe UI,Roboto,sans-serif;height:100vh;display:flex;flex-direction:column'>"
+    + "<div style='font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:8px'>Live chat · drag over your game</div>"
+    + "<div id='st' style='font-size:12px;color:#30d158;margin-bottom:6px'>Connecting…</div>"
+    + "<div id='lines' style='flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:6px'></div>"
+    + "</div>";
+  document.body.style.margin = "0";
+  document.body.style.background = "#0b0b0f";
+  document.title = "Live Chat";
   var colors = ["#ff6b9d","#5ac8fa","#30d158","#ffd60a","#bf5af2","#ff9f0a","#64d2ff","#ff375f"];
-  function colorFor(name){
-    var s = String(name||"");
-    var h = 0;
-    for (var i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))>>>0;
-    return colors[h % colors.length];
-  }
-  function addLine(name, text, gift, join){
+  function addLine(name, text, gift){
     var box = document.getElementById("lines");
     if (!box) return;
     var el = document.createElement("div");
-    el.style.cssText = "align-self:flex-end;max-width:100%;background:rgba(0,0,0,.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:7px 10px;font-size:13px;line-height:1.35;word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.25)";
-    if (gift) el.style.borderColor = "rgba(255,214,10,.45)";
-    if (join) el.style.borderColor = "rgba(48,209,88,.4)";
+    el.style.cssText = "background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;word-break:break-word" + (gift ? ";color:#ffd60a;border-color:rgba(255,214,10,.4)" : "");
     var n = document.createElement("span");
     n.style.fontWeight = "700";
     n.style.marginRight = "6px";
-    n.style.color = gift ? "#ffd60a" : (join ? "#30d158" : colorFor(name));
-    n.textContent = name || "user";
-    var body = document.createElement("span");
-    body.style.color = "rgba(255,255,255,.92)";
-    body.textContent = text || "";
+    var s = String(name || "user");
+    var h = 0; for (var i = 0; i < s.length; i++) h += s.charCodeAt(i);
+    n.style.color = colors[Math.abs(h) % colors.length];
+    n.textContent = s;
     el.appendChild(n);
-    el.appendChild(body);
+    el.appendChild(document.createTextNode(" " + String(text || "")));
     box.appendChild(el);
-    while (box.children.length > 18) box.removeChild(box.firstChild);
+    while (box.children.length > 20) box.removeChild(box.firstChild);
+    setTimeout(function(){
+      if (el.parentNode) {
+        el.style.opacity = "0";
+        el.style.transition = "opacity .3s";
+        setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+      }
+    }, 9000);
   }
-
-  // Live updates via postMessage from main window
-  window.addEventListener("message", function(ev){
-    var d = ev && ev.data;
-    if (!d || d.type !== "golive-chat") return;
-    addLine(d.name, d.text, !!d.gift, !!d.join);
-    var st = document.getElementById("st");
-    if (st) st.textContent = "";
+  window.addEventListener("storage", function(e){
+    if (e.key === "golive_chat_line" && e.newValue) {
+      try {
+        var d = JSON.parse(e.newValue);
+        addLine(d.name, d.text, d.gift);
+        document.getElementById("st").textContent = "Live";
+      } catch(x){}
+    }
   });
-
-  // localStorage fallback (same browser / same phone)
-  var lastT = 0;
-  setInterval(function(){
-    try {
-      var raw = localStorage.getItem("golive_chat_line");
-      if (!raw) return;
-      var row = JSON.parse(raw);
-      if (!row || !row.t || row.t <= lastT) return;
-      lastT = row.t;
-      addLine(row.name, row.text, !!row.gift, !!row.join);
-      var st = document.getElementById("st");
-      if (st) st.textContent = "";
-    } catch(e){}
-  }, 200);
-
-  // Firebase when liveId present (other device / real stream)
+  window.addEventListener("message", function(e){
+    if (e.data && e.data.type === "golive-chat") {
+      addLine(e.data.name, e.data.text, e.data.gift);
+      document.getElementById("st").textContent = "Live";
+    }
+  });
   function startFb(){
     try {
       if (typeof firebase === "undefined") {
-        // script may still be loading
-        if (document.querySelector('script[src*="firebase"]')) {
-          setTimeout(startFb, 300);
-          return;
-        }
-        var st = document.getElementById("st");
-        if (st && liveId) st.textContent = "Chat only · same phone uses auto sync";
+        document.getElementById("st").textContent = "Firebase loading…";
+        setTimeout(startFb, 300);
         return;
       }
-      if (!firebase.apps || !firebase.apps.length) {
+      if (!firebase.apps.length) {
         firebase.initializeApp({
           apiKey: "AIzaSyDaQ06E5Zvj6M9XnqOpWgmUsbe5T_EnaPo",
           authDomain: "golive-ff5ad.firebaseapp.com",
           projectId: "golive-ff5ad",
-          storageBucket: "golive-ff5ad.firebasestorage.app",
-          messagingSenderId: "994701431927",
-          appId: "1:994701431927:web:4e7615434facc5b54ae272",
-          databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com"
+          databaseURL: "https://golive-ff5ad-default-rtdb.firebaseio.com",
+          appId: "1:994701431927:web:4e7615434facc5b54ae272"
         });
       }
       var db = firebase.database();
       if (!liveId) {
-        document.getElementById("st").textContent = "Open from More → Pop-out chat while live";
+        document.getElementById("st").textContent = "No live id — open from More while live";
         return;
       }
-      document.getElementById("st").textContent = "Live";
+      document.getElementById("st").textContent = "Listening…";
       var _seen = {};
-      db.ref("liveChat/" + liveId).limitToLast(25).on("child_added", function(snap){
+      db.ref("liveChat/" + liveId).limitToLast(30).on("child_added", function(snap){
         var key = snap.key;
         if (!key || _seen[key]) return;
         _seen[key] = true;
         var m = snap.val();
         if (!m) return;
-        addLine(m.name || "user", m.text || "", !!m.gift, !!m.join);
-        document.getElementById("st").textContent = "";
+        addLine(m.name || "user", m.text || "", !!m.gift);
+        document.getElementById("st").textContent = "Live";
       });
     } catch(e) {
-      var st = document.getElementById("st");
-      if (st) st.textContent = (e && e.message) || "Error";
+      document.getElementById("st").textContent = e.message || "Error";
     }
   }
-  setTimeout(startFb, 250);
+  setTimeout(startFb, 200);
 })();
 /* ---- end popout boot ---- */
 
