@@ -85,8 +85,10 @@ body.cinema-mode #video-wrap{/* full bleed */}
 .chat-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px 14px 6px;display:flex;flex-direction:column;gap:5px;pointer-events:auto;scrollbar-width:none}
 .chat-list::-webkit-scrollbar{display:none}
 .msg{font-size:.82rem;line-height:1.4;word-break:break-word;padding:3px 0;flex-shrink:0;text-shadow:none;opacity:.95}
-.msg.msg-new{animation:msgIn .15s ease}
-@keyframes msgIn{from{opacity:0}to{opacity:.95}}
+.msg.msg-new{animation:msgIn .18s ease}
+.msg.msg-fast{animation:msgFastIn .12s ease}
+@keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:.95;transform:none}}
+@keyframes msgFastIn{from{opacity:0;transform:translateY(4px)}to{opacity:.95;transform:none}}
 .msg .uname{font-weight:600;margin-right:6px;font-size:.8rem}
 .msg .c0{color:#ff6b9d}.msg .c1{color:#5ac8fa}.msg .c2{color:#30d158}.msg .c3{color:#ffd60a}.msg .c4{color:#bf5af2}.msg .c5{color:#ff9f0a}.msg .c6{color:#64d2ff}.msg .c7{color:#ff375f}
 .msg.host .uname{color:#ff4d6d}
@@ -458,6 +460,7 @@ let giftWarmUntil = 0;
 let forcedPhrase = "";
 let forcedPhraseRate = 0.85;
 let chatSpeed = localStorage.getItem("gl_chat_speed") || "medium";
+
 let liveRegion = localStorage.getItem("gl_live_region") || "en";
 let botTimer=null, chatTimer=null, leaveTimer=null, likeTimer=null, botGiftTimer=null, realTimer=null, phaseTimer=null;
 let coins = 0;
@@ -508,8 +511,8 @@ const GIFTS = (function(){
 })();
 
 /* ---------- BOT NAMES (large unique pool) ---------- */
-const adjs = ["Cool","Epic","Pro","Shadow","Neon","Cyber","Swift","Fire","Ice","Nova","Turbo","Silent","Lucky","Dark","Bright","Wild","Chill","Hyper","Pixel","Quantum","Ghost","Storm","Crystal","Solar","Lunar","Rapid","Frost","Blaze","Thunder","Viper","Omega","Alpha","Sigma","Ultra","Mega","Nano","Prime","Elite","Royal","Golden","Silver","Crimson","Azure","Violet","Amber","Jade","Ivory","Steel","Iron","Plasma","Cosmic","Stellar","Galactic","Mystic","Rogue","Phantom","Ninja","Samurai","Wizard","Knight","Dragon","Phoenix","Wolf","Fox","Hawk","Eagle","Tiger","Lion","Bear","Shark","Cobra","Falcon","Raven","Owl","Panda","Koala","Otter","Bunny","Kitty","Puppy","Duck","Frog","Bee","Ant","Spider","Scorpion","Gamer","Streamer","Clutch","Ranked","Casual","Tryhard","Noob","Veteran","Rookie","Legend","Mythic","Divine","Immortal","Ascended","Radiant","Unreal","Godly","Sweaty","Tilted","Chad","SigmaX","Velvet","Cobalt","Ember","Ashen","Glitch","Retro","Vapor","Synth","Analog","Digital","Orbit","Comet","Nebula","Vortex","Pulse","Static","Feral","Zen","Hype","Salty","Goofy","Sneaky","Sleek","Rusty","Shiny","Drowsy","Spicy","Crispy","Chunky","SneakyX","Wavy","Bouncy","Loopy","Zesty"];
-const nouns = ["Wolf","Fox","Hawk","Eagle","Tiger","Lion","Bear","Shark","Cobra","Viper","Falcon","Raven","Owl","Panda","Dragon","Phoenix","Knight","Wizard","Ninja","Samurai","Gamer","Player","Pro","King","Queen","Boss","Chief","Captain","Pilot","Rider","Hunter","Slayer","Killer","Master","Lord","Dude","Guy","Girl","Kid","Boy","GirlX","Bro","Sis","Mate","Pal","Buddy","Champ","Hero","Legend","Star","Moon","Sun","Comet","Nova","Blitz","Flash","Bolt","Spark","Wave","Storm","Cloud","Rain","Snow","Ice","Fire","Flame","Ember","Ash","Dust","Rock","Stone","Crystal","Gem","Diamond","Gold","Silver","Steel","Iron","Pixel","Bit","Byte","Code","Hack","Glitch","Bug","Bot","Mod","Admin","Host","Viewer","Fan","Simp","Hater","Troll","Clown","Jester","Joker","Ace","KingX","QueenX","Jack","Rook","Pawn","Bishop","KnightX","Sniper","Tank","Healer","Support","Carry","Mid","Jungle","Top","ADC","IGL","Fragger","Lurker","Rusher","Camper","Sweat","Tryhard","Noob","Boomer","Zoomer","GenZ","Meme","Vibe","Aura","Rizz","Sigma","Alpha","Beta","Omega","Chaos","Order","Void","Abyss","Realm","World","Earth","Mars","Venus","Pluto","Saturn","Jupiter","Neptune","Galaxy","Universe","Dimension","Portal","Gate","Key","Lock","Chest","Loot","Drop","Item","Skin","Emote","Badge","Trophy","Medal","Crown","Throne","Castle","Tower","Fort","Base","Camp","Lobby","Server","Match","Rank","Tier","League","Season","Battle","War","Fight","Duel","Quest","Raid","Dungeon","Boss","Mob","NPC","XP","Level","Skill","Perk","Buff","Nerf","Meta","Patch","Update","GlitchX"];
+const adjs = ["Cool","Epic","Pro","Shadow","Neon","Cyber","Swift","Fire","Ice","Nova","Turbo","Silent","Lucky","Dark","Bright","Wild","Chill","Hyper","Pixel","Quantum","Ghost","Storm","Crystal","Solar","Lunar","Rapid","Frost","Blaze","Thunder","Viper","Omega","Alpha","Sigma","Ultra","Mega","Nano","Prime","Elite","Royal","Golden","Silver","Crimson","Azure","Violet","Amber","Jade","Ivory","Steel","Iron","Plasma","Cosmic","Stellar","Galactic","Mystic","Rogue","Phantom","Ninja","Samurai","Wizard","Knight","Dragon","Phoenix","Wolf","Fox","Hawk","Eagle","Tiger","Lion","Bear","Shark","Cobra","Falcon","Raven","Owl","Panda","Koala","Otter","Bunny","Kitty","Puppy","Duck","Frog","Bee","Ant","Spider","Scorpion","Gamer","Streamer","Clutch","Ranked","Casual","Tryhard","Noob","Veteran","Rookie","Legend","Mythic","Divine","Immortal","Ascended","Radiant","Unreal","Godly","Sweaty","Tilted","Chad","SigmaX","Velvet","Cobalt","Ember","Ashen","Glitch","Retro","Vapor","Synth","Analog","Digital","Orbit","Comet","Nebula","Vortex","Pulse","Static","Feral","Zen","Hype","Salty","Goofy","Sneaky","Sleek","Rusty","Shiny","Drowsy","Spicy","Crispy","Chunky","SneakyX","Wavy","Bouncy","Loopy","Zesty","Quiet","Loud","SwiftX","Broken","Fresh","Toxic","Based","Cringe","Sigma","Skibidi","Rizz","Aura","Locked","Cooked","Mid","Valid","Sus","GOAT","NPC","Main","Alt","TurboX","Night","Dawn","Dusk","SolarX","LunarX","Arctic","Desert","Forest","Ocean","River","Mountain","Valley","City","Street","Block","Corner","CloudX","Rainy","Sunny","Windy","Foggy","Frozen","Melted","Sparked","Charged","Wired","Offline","Online","Buffered","Laggy","ClutchX","Tilt","Calm","HypeX","Dead","Alive","Awake","Asleep","Busy","Free","Rich","Broke","LuckyX","Cursed","Blessed","Holy","Chaotic","Orderly","Random","Fixed","Stable","Unstable","Smooth","Rough","SoftX","HardX","LightX","HeavyX","Tiny","Huge","Micro","Macro","Local","Global","Public","Private","Secret","Open","Closed","Hidden","Found","Lost","Seeking","Chasing","Running","Walking","Flying","Driving","Sailing","Diving"];
+const nouns = ["Wolf","Fox","Hawk","Eagle","Tiger","Lion","Bear","Shark","Cobra","Viper","Falcon","Raven","Owl","Panda","Dragon","Phoenix","Knight","Wizard","Ninja","Samurai","Gamer","Player","Pro","King","Queen","Boss","Chief","Captain","Pilot","Rider","Hunter","Slayer","Killer","Master","Lord","Dude","Guy","Girl","Kid","Boy","GirlX","Bro","Sis","Mate","Pal","Buddy","Champ","Hero","Legend","Star","Moon","Sun","Comet","Nova","Blitz","Flash","Bolt","Spark","Wave","Storm","Cloud","Rain","Snow","Ice","Fire","Flame","Ember","Ash","Dust","Rock","Stone","Crystal","Gem","Diamond","Gold","Silver","Steel","Iron","Pixel","Bit","Byte","Code","Hack","Glitch","Bug","Bot","Mod","Admin","Host","Viewer","Fan","Simp","Hater","Troll","Clown","Jester","Joker","Ace","KingX","QueenX","Jack","Rook","Pawn","Bishop","KnightX","Sniper","Tank","Healer","Support","Carry","Mid","Jungle","Top","ADC","IGL","Fragger","Lurker","Rusher","Camper","Sweat","Tryhard","Noob","Boomer","Zoomer","GenZ","Meme","Vibe","Aura","Rizz","Sigma","Alpha","Beta","Omega","Chaos","Order","Void","Abyss","Realm","World","Earth","Mars","Venus","Pluto","Saturn","Jupiter","Neptune","Galaxy","Universe","Dimension","Portal","Gate","Key","Lock","Chest","Loot","Drop","Item","Skin","Emote","Badge","Trophy","Medal","Crown","Throne","Castle","Tower","Fort","Base","Camp","Lobby","Server","Match","Rank","Tier","League","Season","Battle","War","Fight","Duel","Quest","Raid","Dungeon","Boss","Mob","NPC","XP","Level","Skill","Perk","Buff","Nerf","Meta","Patch","Update","GlitchX","Clip","Moment","Scene","Frame","Shot","Angle","Cam","Mic","Headset","Monitor","Keyboard","Mouse","Controller","Pad","Stick","Button","Screen","Window","Tab","App","Site","Link","Post","Comment","Reply","Like","Share","Follow","Sub","Donate","Gift","Rose","Heart","StarX","CrownX","BadgeX","RankX","LevelX","XPX","Coin","Cash","Bank","Shop","Market","Trade","Deal","Win","Loss","Draw","Streak","Combo","Score","Point","Goal","Save","BlockX","Pass","ShotX","Dunk","GoalX","AceX","Fail","Clutch","Choke","Comeback","Snipe","Spray","Peek","Hold","Push","Rotate","Stack","Split","Default","Execute","Plant","Defuse","Rush","Lurk","Anchor","Entry","SupportX","IGLX"];
 const tags = ["","_YT","_TT","_TV","_Live","_GG","_XD","_Pro","_God","_Godly","_King","_Queen","_OP","_MVP","_Ace","x","xx","xxx","07","99","21","24","69","420","777","1337","_VR","_PC","_Mobile","_Console","_Ranked","_Casual","_Main","_Alt","_Smurf","_Tryhard","_Chill","_Vibes","_Only","_Real","_Fake","_Bot","_Human","_AI","_Gamer","_Plays","_Streams","_Clips","_Highlights","_USA","_UK","_EU","_JP","_KR","_BR","_IN","_TR","_DE","_FR","_ES","_IT","_MX","_CA","_AU","_PL","_UA","_RU","_PH","_ID","_VN","_TH","_SA","_AE","_EG","_NG","_ZA","_AR","_CL","_CO","_PE","_GE","_IL","_NL","_SE","_NO","_FI","_PT","_RO","_CN","_TW","_HK"];
 function makeName(){
   const a = adjs[Math.floor(Math.random()*adjs.length)];
@@ -522,7 +525,7 @@ function makeName(){
   ];
   return styles[Math.floor(Math.random()*styles.length)].slice(0,20);
 }
-const NAMES = [...new Set(Array.from({length:14000}, makeName))];
+const NAMES = [...new Set(Array.from({length:28000}, makeName))];
 let ni = Math.floor(Math.random()*NAMES.length);
 
 /* ---------- GEORGIAN NAMES (sensible + translit + script) ---------- */
@@ -7025,7 +7028,7 @@ function genEnChat(){
     return gCaps(String(s).trim());
   }
   // short spam / reactions
-  if (t < 0.78) s = gPick(["W","L","ratio","lol","lmao","fr","ong","nah","yes","no","ok","same","real","facts","bro","sis","gg","ez","ns","nt","??","...","!!!!","dead","I'm weak"]);
+  if (t < 0.78) s = gPick(["W","L","ratio","lol","lmao","fr","ong","nah","yes","no","ok","same","real","facts","bro","sis","gg","ez","ns","nt","??","...","!!!!","dead","I'm weak","camera","mic up","let him cook","absolute cinema","clip that","W stream","chat on fire","who joined","first time","fps drop","from EU","NA here","GE check","cook","locked in","we moving","no cap","on god","bet","say less","lowkey","highkey"]);
   // hate / toxic
   else if (t < 0.16) s = gPick([
     "this is mid","L stream","skill issue","touch grass","delete the game","boring","cringe",
@@ -8163,9 +8166,16 @@ function startRemoteBotRelay(){
 
 
 let joinAnnounceTimer = null;
-function joinSpeedGap(total){
+function joinSpeedGap(total, instant){
   // Visible gap between EACH join on screen
   let gap;
+  if (instant) {
+    if (total <= 10) gap = 180 + Math.random() * 120;
+    else if (total <= 100) gap = 120 + Math.random() * 90;
+    else if (total <= 1000) gap = 90 + Math.random() * 70;
+    else gap = 70 + Math.random() * 50;
+    return Math.max(50, gap);
+  }
   if (total <= 10) gap = 700 + Math.random() * 500;
   else if (total <= 100) gap = 550 + Math.random() * 400;
   else if (total <= 1000) gap = 420 + Math.random() * 320;
@@ -8186,7 +8196,7 @@ function paintJoinLine(name, text){
   div.querySelector(".body").textContent = text || "joined the live";
   list.appendChild(div);
   // trim DOM
-  const MAX_CHAT = 40;
+  const MAX_CHAT = 56;
   while (list.children.length > MAX_CHAT) {
     list.removeChild(list.firstChild);
   }
@@ -8196,6 +8206,7 @@ function paintJoinLine(name, text){
 function announceJoins(count, names, opts){
   opts = opts || {};
   const waveCount = !!opts.waveCount;
+  const isInstant = !!opts.instant;
   const startCount = Math.max(0, Math.floor(Number(opts.startCount) || 0));
   const targetCount = Math.max(startCount, Math.floor(Number(opts.targetCount) || (startCount + count)));
 
@@ -8207,11 +8218,16 @@ function announceJoins(count, names, opts){
   }
 
   // Fewer on-screen join lines; count can still rise to full in wave mode
-  const maxAnn = total <= 10 ? total : (total <= 100 ? 22 : (total <= 1000 ? 32 : 42));
+  // Instant: short visual drip only — does NOT throttle chat
+  // Cap joins low so 100k Instant never freezes the host UI
+  const maxAnn = isInstant
+    ? (total <= 10 ? total : (total <= 100 ? 10 : (total <= 1000 ? 14 : 18)))
+    : (total <= 10 ? total : (total <= 100 ? 20 : (total <= 1000 ? 28 : 36)));
   let shown = 0;
   let chatsDuring = 0;
-  const chatsTarget = 4 + Math.floor(Math.random() * 3);
-  window._joinWaveActive = true;
+  const chatsTarget = isInstant ? 2 : (4 + Math.floor(Math.random() * 3));
+  // Only Wave mode blocks/throttles chat. Instant keeps full speed.
+  window._joinWaveActive = !isInstant;
   const countPerAnn = maxAnn > 0 ? (targetCount - startCount) / maxAnn : 0;
 
   function emitJoin(){
@@ -8272,13 +8288,13 @@ function announceJoins(count, names, opts){
       const now = Date.now();
       chatWarmUntil = 0;
       window._earlyChirpDone = true;
-      // Instant full chat after join paint — matches old "alive" feel
-      chatFirstMsgAt = now;
-      chatRampStart = now - 30000;
+      // Full chat after join paint — force restart so host never stays slow
+      chatFirstMsgAt = now - 1000;
+      chatRampStart = now - 60000;
       chatPhase = "normal";
       try {
-        if (!chatTimer && typeof scheduleChat === "function") scheduleChat();
-        else if (typeof scheduleChat === "function") scheduleChat();
+        clearTimeout(chatTimer); chatTimer = null;
+        if (typeof scheduleChat === "function") scheduleChat();
       } catch(e){}
       return;
     }
@@ -8295,7 +8311,7 @@ function announceJoins(count, names, opts){
       chatsDuring++;
     }
 
-    joinAnnounceTimer = setTimeout(runOne, joinSpeedGap(total));
+    joinAnnounceTimer = setTimeout(runOne, joinSpeedGap(total, isInstant));
   }
 
   joinAnnounceTimer = setTimeout(runOne, 300 + Math.random() * 200);
@@ -8322,22 +8338,28 @@ async function addBotsBatch(n){
   if (isHost) {
     // Mark count as authoritative so FB listener cannot shrink it
     window._botsLocalAuthority = true;
-    if (!chatTimer) {
-      startBots();
-    } else {
-      // Keep chat alive — do not full-stop
-      try { scheduleChat(); } catch(e){}
-      clearTimeout(scTimer); scTimer = null;
-      try { scheduleSuperChat(true); } catch(e){}
-    }
-    // Ensure timers not stuck after bulk add
+    // HARD reset chat state so bulk add never leaves host stuck on slow/warmup
     chatWarmUntil = 0;
     window._earlyChirpDone = true;
-    chatFirstMsgAt = Date.now();
-    chatRampStart = Date.now() - 30000;
+    chatFirstMsgAt = Date.now() - 1000;
+    chatRampStart = Date.now() - 60000;
     chatPhase = "normal";
+    window._giftWaveStarted = true;
+    giftWarmUntil = 0;
+    // Instant = chat never throttled by join drip. Wave = throttle only while joins paint.
+    if (mode === "instant") {
+      window._joinWaveActive = false;
+    }
+    // Kill any stuck timer then force full-speed scheduleChat
+    clearTimeout(chatTimer); chatTimer = null;
+    clearTimeout(scTimer); scTimer = null;
+    try { scheduleChat(); } catch(e){}
+    try { scheduleBotDonation(); } catch(e){}
+    try { scheduleSuperChat(true); } catch(e){}
+    if (!leaveTimer) try { scheduleLeave(); } catch(e){}
     announceJoins(n, null, {
       waveCount: mode === "wave",
+      instant: mode === "instant",
       startCount: startCount,
       targetCount: targetCount
     });
@@ -8392,7 +8414,6 @@ sMenu.querySelectorAll(".b-opt").forEach(function(opt){
     sMenu.classList.remove("show");
     clearTimeout(chatTimer); chatTimer = null;
     if (isHost && currentLiveId) scheduleChat();
-    // Push speed to this live so host/relay use it (admin controlling someone else's live)
     if (fbReady && fbDb && currentLiveId && isAdmin) {
       try { fbDb.ref("lives/" + currentLiveId + "/chatSpeed").set(chatSpeed); } catch(e){}
     }
@@ -8402,7 +8423,6 @@ sMenu.querySelectorAll(".b-opt").forEach(function(opt){
 document.addEventListener("click", function(e){
   if (sMenu && !sMenu.contains(e.target)) sMenu.classList.remove("show");
 });
-
 
 /* ---------- MORE MENU (⋯) ---------- */
 const moreMenu = document.getElementById("more-menu");
@@ -8810,6 +8830,7 @@ function speedFactor(){
     default: return 1.0;
   }
 }
+
 /** Old fast chat timing — still silent with 0 bots */
 function scheduleChat(){
   clearTimeout(chatTimer); chatTimer = null;
@@ -8819,12 +8840,31 @@ function scheduleChat(){
     return;
   }
   const now = Date.now();
-  // --- Join wave: still drip chat so admin stream never looks frozen ---
+  // --- Join wave: admin high count keeps FULL chat speed (not frozen / not slow) ---
   if (window._joinWaveActive) {
-    if (Math.random() < 0.5) {
-      try { addMsg(nextName(), nextMsg()); } catch(e){}
+    const heavy = isAdmin && botCount >= 20;
+    if (heavy) {
+      // Match post-wave full speed so host never feels stuck during join paint
+      let n = 1;
+      if (chatSpeed === "ultra") n = 4 + Math.floor(Math.random()*6);
+      else if (chatSpeed === "really") n = 3 + Math.floor(Math.random()*4);
+      else if (chatSpeed === "fast") n = 2 + Math.floor(Math.random()*3);
+      else if (botCount > 1000) n = 2 + Math.floor(Math.random()*2);
+      for (let i = 0; i < n; i++) {
+        try { addMsg(nextName(), nextMsg()); } catch(e){}
+      }
+      let gap;
+      if (chatSpeed === "ultra") gap = 18 + Math.random()*22;
+      else if (chatSpeed === "really") gap = 35 + Math.random()*40;
+      else if (chatSpeed === "fast") gap = 70 + Math.random()*60;
+      else gap = 140 + Math.random()*120;
+      chatTimer = setTimeout(scheduleChat, gap);
+    } else {
+      if (Math.random() < 0.55) {
+        try { addMsg(nextName(), nextMsg()); } catch(e){}
+      }
+      chatTimer = setTimeout(scheduleChat, 280 + Math.random() * 200);
     }
-    chatTimer = setTimeout(scheduleChat, 280 + Math.random() * 200);
     return;
   }
   // --- Early drip (only if no join wave): ~3–5s allow 1–2 messages ---
@@ -8852,8 +8892,9 @@ function scheduleChat(){
   else if (botCount < 300) base = 350 + Math.random()*300;
   else if (botCount < 1000) base = 180 + Math.random()*160;
   else if (botCount < 5000) base = 100 + Math.random()*90;
-  else if (botCount < 20000) base = 65 + Math.random()*50;
-  else base = 45 + Math.random()*35;
+  else if (botCount < 20000) base = 55 + Math.random()*40;
+  else if (botCount < 100000) base = 32 + Math.random()*28;
+  else base = 22 + Math.random()*20;
 
   // Message wave: 1 → 2 → 4 → 8 → full (NOT instant after joins)
   let rampMul = 1;
@@ -8889,17 +8930,20 @@ function scheduleChat(){
     }
     if (p >= 1) chatPhase = "normal";
   } else {
-    // full speed multi
+    // full speed multi — high counts + ultra = dense chat on host
     if (botCount > 40) multi = 1 + (Math.random() < 0.5 ? 1 : 0);
     if (botCount > 200) multi = 1 + Math.floor(Math.random()*2);
     if (botCount > 1000) multi = 2 + Math.floor(Math.random()*2);
     if (botCount > 8000) multi = 2 + Math.floor(Math.random()*3);
+    if (botCount > 50000) multi = 3 + Math.floor(Math.random()*4);
+    if (botCount > 200000) multi = 5 + Math.floor(Math.random()*6);
+    if (botCount > 1000000) multi = 8 + Math.floor(Math.random()*8);
   }
-  if (chatSpeed === "really") multi += 1;
-  if (chatSpeed === "ultra") multi += 2;
-  multi = Math.min(multi, chatSpeed === "ultra" ? 8 : 5);
+  if (chatSpeed === "really") multi += 2;
+  if (chatSpeed === "ultra") multi += 4;
+  multi = Math.min(multi, chatSpeed === "ultra" ? 22 : (chatSpeed === "really" ? 14 : 8));
 
-  let delay = Math.max(chatSpeed === "ultra" ? 16 : 28, base * f * rampMul);
+  let delay = Math.max(chatSpeed === "ultra" ? 12 : (chatSpeed === "really" ? 18 : 28), base * f * rampMul);
   // During ramp stages, force readable gaps (never spam-fast)
   if (chatRampStart && chatPhase !== "normal") {
     if (multi <= 1) delay = Math.max(delay, 900);
@@ -8975,7 +9019,7 @@ function startLikeSim(){
 function stopLikeSim(){ clearTimeout(likeTimer); likeTimer = null; }
 
 /* ---------- CHAT ---------- */
-const MAX_CHAT = 28; // Kick-like: few lines on screen = smooth at any speed
+const MAX_CHAT = 56; // keep more lines so fast chat actually scrolls instead of swapping
 const chatQueue = [];
 let chatRenderScheduled = false;
 let chatScrollQueued = false;
@@ -8989,33 +9033,32 @@ function flushChatQueue(){
   const list = document.getElementById("chat-list");
   if (!list || !chatQueue.length) return;
 
-  // If backlog is huge (ultra + millions of bots), drop old queued lines —
-  // only paint the newest. Looks like Kick: chat "flies", never freezes.
+  // Drop only extreme backlog so newest messages still paint
   const fast = chatSpeed === "ultra" || chatSpeed === "really";
-  if (chatQueue.length > (fast ? 40 : 80)) {
-    chatQueue.splice(0, chatQueue.length - (fast ? 24 : 40));
+  if (chatQueue.length > (fast ? 50 : 90)) {
+    chatQueue.splice(0, chatQueue.length - (fast ? 30 : 50));
   }
 
-  // Bigger batches at high speed — but NEVER dump many joins in one frame
-  let maxBatch = 6;
-  if (chatSpeed === "fast") maxBatch = 10;
-  if (chatSpeed === "really") maxBatch = 18;
-  if (chatSpeed === "ultra") maxBatch = 28;
-  if (chatQueue.length > 20) maxBatch = Math.max(maxBatch, 20);
-  if (chatQueue.length > 50) maxBatch = Math.max(maxBatch, 30);
-  // During join wave or if next items are joins, paint 1–2 max so it looks real
+  // Smaller batches = continuous drip / real stream feel (not text swap)
+  let maxBatch = 4;
+  if (chatSpeed === "fast") maxBatch = 6;
+  if (chatSpeed === "really") maxBatch = 8;
+  if (chatSpeed === "ultra") maxBatch = 10;
+  if (chatQueue.length > 30) maxBatch = Math.min(maxBatch + 2, 12);
+  // During join wave paint 1 at a time
   const joinHeavy = window._joinWaveActive || (chatQueue[0] && chatQueue[0].join);
   if (joinHeavy) maxBatch = 1;
 
   const batch = chatQueue.splice(0, Math.min(maxBatch, chatQueue.length));
   const frag = document.createDocumentFragment();
-  const noAnim = fast || batch.length > 8;
+  // Always animate lightly so it feels like messages are arriving
+  const useFastAnim = fast || batch.length > 5;
 
   for (let i = 0; i < batch.length; i++) {
     const msg = batch[i];
     const div = document.createElement("div");
     const isJoin = !!msg.join;
-    div.className = "msg" + (noAnim ? " msg-fast" : " msg-new") + (msg.host ? " host" : "") + (msg.gift ? " gift-msg" : "") + (isJoin ? " join-line" : "");
+    div.className = "msg" + (useFastAnim ? " msg-fast" : " msg-new") + (msg.host ? " host" : "") + (msg.gift ? " gift-msg" : "") + (isJoin ? " join-line" : "");
     if (isJoin) {
       const icon = document.createElement("span");
       icon.className = "join-icon";
@@ -9044,18 +9087,17 @@ function flushChatQueue(){
   }
   list.appendChild(frag);
 
-  // bulk trim from top without per-node layout thrash
+  // trim oldest from top
   let extra = list.children.length - MAX_CHAT;
   if (extra > 0) {
-    if (extra > 15) {
-      // remove a range at once when far over limit
+    if (extra > 20) {
       while (extra-- > 0 && list.firstChild) list.removeChild(list.firstChild);
     } else {
       while (extra-- > 0 && list.firstElementChild) list.firstElementChild.remove();
     }
   }
 
-  // one scroll per frame max
+  // always stick to bottom
   if (!chatScrollQueued) {
     chatScrollQueued = true;
     requestAnimationFrame(function(){
@@ -9064,12 +9106,14 @@ function flushChatQueue(){
     });
   }
 
-  if (!noAnim) {
-    setTimeout(function(){
-      const nodes = list.querySelectorAll(".msg-new");
-      for (let i = 0; i < nodes.length; i++) nodes[i].classList.remove("msg-new");
-    }, 140);
-  }
+  // clean animation classes
+  setTimeout(function(){
+    const nodes = list.querySelectorAll(".msg-new, .msg-fast");
+    for (let i = 0; i < nodes.length; i++) {
+      nodes[i].classList.remove("msg-new");
+      nodes[i].classList.remove("msg-fast");
+    }
+  }, useFastAnim ? 130 : 190);
 
   if (chatQueue.length) scheduleChatRender();
 }
